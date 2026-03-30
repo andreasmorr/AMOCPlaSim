@@ -1,1 +1,12 @@
-# AMOCResilience
+# Sales Pitch
+Resilience encompasses a range of concepts that describe how a dynamical system responds to perturbations. These concepts differ in both the type of disturbance considered and the aspect of recovery they emphasize. In natural systems, however, most resilience measures are difficult to quantify directly, as controlled experiments are often not feasible. A common alternative is to use numerical models to simulate system responses to perturbations. Yet it remains unclear whether different notions of resilience yield consistent insights across models of varying complexity. We address this question in the context of the Atlantic Meridional Overturning Circulation (AMOC), for which a wide hierarchy of models exists. Our approach combines multiple levels of complexity: we analyze conceptual box models, perform extensive trajectory simulations with the intermediate-complexity model CLIMBER-X, and investigate transient dynamics near the saddle state separating AMOC “on” and “off” regimes using the general circulation model PlaSim. In addition, we apply model reduction techniques to high-dimensional outputs to examine resilience in reduced representations. Our goal is to determine whether different resilience metrics exhibit coherent trends under climate change, which is expected to push the AMOC closer to a potential tipping point. If multiple resilience indicators consistently signal a loss of stability across models and datasets, they may serve as robust early-warning indicators of such a transition.
+
+# Tasks
+## 3-box Model
+Wood et al. and later Alkhayuon et al. parametrize a 3-box model of the AMOC. They do this for a 1xCO2 setting and a 2xCO2 setting. This gives us two dynamical systems which we can each investigate for resilience using the Attractors.jl stability measures functionality. We can then compare and look for any resilience changes. We can also do the same for a fixed CO2 setting, say 2xCO2, and then compute resilience for a range of freshwater hosing parameter (H) values and look for resilience trends there.
+
+## CLIMBER-X
+We can run many trajectories in the CLIMBER-X model starting from perturbed states off of the stable AMOC state. These perturbations should be of a particular nature, changing temperature and salinity across large coherent parts of the ocean (similar to the boxes from the box-model). This must be done outside of the central repository.
+
+## PlaSim
+We have high-dimensional trajectories going from the saddle (edge) state to either the on or the off state of the AMOC. We have them for a configuration of current CO2 levels and for a heightened CO2 level. We can analyze these time series for their convergence time, the distance of the edge state to the attractor, etc. 
