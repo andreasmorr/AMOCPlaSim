@@ -15,9 +15,13 @@ Key workflow:
   1. `load_plasim_trajectories` — load all NetCDF files into a DataFrame
   2. `classify_trajectories`    — label each trajectory AMOC-on or AMOC-off
   3. `estimate_attractors`      — estimate attractor positions from final states
-  4. `compute_convergence_times`       — time to converge to attractor
+  4. `compute_convergence_times`           — time to converge to attractor
   5. `compute_edge_to_attractor_distances` — distance from edge state to attractor
-  6. `plasim_resilience_summary` — convenience wrapper for all of the above
+  6. `plasim_resilience_summary`           — convenience wrapper for all of the above
+
+Local variability around equilibria:
+  7. `load_plasim_state_timeseries` — load full time series from an equilibrium file
+  8. `compute_local_variability`    — variance, autocorrelation, and distance measures
 """
 
 using NCDatasets
@@ -28,6 +32,37 @@ using LinearAlgebra
 # ─────────────────────────────────────────────────────────────────────────────
 # Data loading
 # ─────────────────────────────────────────────────────────────────────────────
+
+"""
+    load_plasim_state_mean(filepath, variable_names) → Vector{Float64}
+
+Load a converged-state NetCDF file (e.g. `plasimelancholia_285ppm_on.etc.nc`)
+and return the time-mean of each variable as a state vector.
+
+These files contain trajectories that have already converged to the vicinity of
+an equilibrium (AMOC-on, AMOC-off, or edge state), so their time-mean is a
+better estimate of the attractor/edge position than the final states of
+bisection trajectories.
+
+# Arguments
+- `filepath`:       full path to the NetCDF file
+- `variable_names`: variable names to read (same order as used elsewhere, e.g.
+                    `["redu1", "redu2", "redu3"]`)
+
+# Returns
+`Vector{Float64}` of length `length(variable_names)` with the time-mean state.
+"""
+function load_plasim_state_mean(filepath::String, variable_names::Vector{String})
+    means = zeros(Float64, length(variable_names))
+    NCDataset(filepath, "r") do ds
+        for (k, vname) in enumerate(variable_names)
+            data = Float64.(coalesce.(ds[vname][:], NaN))
+            valid = filter(!isnan, data)
+            means[k] = isempty(valid) ? NaN : mean(valid)
+        end
+    end
+    return means
+end
 
 """
     load_plasim_trajectories(;
@@ -98,7 +133,7 @@ function load_plasim_trajectories(;
                     data_cols = Dict{Symbol, Vector{Float64}}()
                     for (k, vname) in enumerate(variable_names)
                         raw = ds[vname][:, :]   # (track_dim, time_dim)
-                        data_cols[Symbol("x$k")] = Float64.(raw[track, :])
+                        data_cols[Symbol("x$k")] = Float64.(coalesce.(raw[track, :], NaN))
                     end
                     t_steps = 1:n_tracks  # n_tracks is the time dimension here
                     for t in t_steps
@@ -120,7 +155,7 @@ function load_plasim_trajectories(;
                     data_cols = Dict{Symbol, Vector{Float64}}()
                     for (k, vname) in enumerate(variable_names)
                         raw = ds[vname][:, :]   # (time_dim, track_dim)
-                        data_cols[Symbol("x$k")] = Float64.(raw[:, track])
+                        data_cols[Symbol("x$k")] = Float64.(coalesce.(raw[:, track], NaN))
                     end
                     for t in 1:n_time
                         push!(rows, (
@@ -164,6 +199,9 @@ function _get_final_states(df::DataFrame, n_dims::Int; final_fraction::Float64 =
     for (j, tid) in enumerate(ids)
         traj = filter(r -> r.trajectory_id == tid, df)
         sort!(traj, :time)
+        # Drop rows where any EOF dimension is NaN (NetCDF fill values)
+        valid_mask = [!any(isnan(traj[t, Symbol("x$k")]) for k in 1:n_dims) for t in 1:nrow(traj)]
+        traj = traj[valid_mask, :]
         n_pts = nrow(traj)
         n_final = max(1, round(Int, final_fraction * n_pts))
         tail = traj[(end - n_final + 1):end, :]
@@ -181,8 +219,8 @@ end
 Classify each trajectory as ending at the AMOC-on (label=1) or AMOC-off
 (label=2) attractor, based on the first EOF component (x1 = redu1).
 
-The AMOC-on state has a higher value of redu1 (stronger overturning), and the
-AMOC-off state has a lower value. We split by the median of final redu1 values.
+The AMOC-on state has a lower value of redu1, and the AMOC-off state has a
+higher value. We split by the median of final redu1 values.
 
 Returns a vector of length `n_trajectories` with values 1 (AMOC-on) or 2
 (AMOC-off), in the same order as `sort(unique(df.trajectory_id))`.
@@ -192,11 +230,11 @@ function classify_trajectories(df::DataFrame, n_dims::Int;
     ids, final_states = _get_final_states(df, n_dims; final_fraction)
 
     # Use first EOF (redu1) to separate AMOC-on from AMOC-off
-    # Convention: higher redu1 = AMOC-on
+    # Convention: lower redu1 = AMOC-on
     redu1_vals = final_states[:, 1]
     threshold  = median(redu1_vals)
 
-    labels = [v >= threshold ? 1 : 2 for v in redu1_vals]
+    labels = [v < threshold ? 1 : 2 for v in redu1_vals]
     return labels
 end
 
@@ -241,35 +279,40 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 
 """
-    compute_convergence_times(df, n_dims, attractors; ε=0.05) → Dict{Int, Float64}
+    compute_convergence_times(df, n_dims, attractors; ε_on=0.05, ε_off=0.05) → Dict{Int, Float64}
 
 For each trajectory, find the first time step at which the trajectory enters
-and stays within ε (Euclidean distance) of its target attractor.
+and stays within the convergence threshold (Euclidean distance) of its target
+attractor.  Separate thresholds are used for AMOC-on (`ε_on`) and AMOC-off
+(`ε_off`) to account for different attractor sizes.
 
-"Stays within" means all subsequent time steps also remain within ε (to avoid
-transient close passes).
+"Stays within" means all subsequent time steps also remain within the threshold
+(to avoid transient close passes).
 
-If a trajectory never converges within ε, the convergence time is set to the
-final time step of that trajectory.
+If a trajectory never converges, its convergence time is NaN (excluded from means).
 
 # Arguments
 - `df`:         DataFrame from `load_plasim_trajectories`
 - `n_dims`:     number of EOF dimensions
 - `attractors`: Dict from `estimate_attractors`
-- `ε`:          convergence threshold (in EOF units)
+- `ε_on`:       convergence threshold for AMOC-on trajectories (EOF units)
+- `ε_off`:      convergence threshold for AMOC-off trajectories (EOF units)
 
 # Returns
-Dict mapping `trajectory_id => convergence_time` (as a Float64 time-step index).
+Dict mapping `trajectory_id => convergence_time` (NaN if not converged).
 """
 function compute_convergence_times(df::DataFrame, n_dims::Int,
                                     attractors::Dict{Int, Vector{Float64}};
-                                    ε::Float64 = 0.05)
+                                    ε_on::Float64 = 0.05, ε_off::Float64 = 0.05)
     labels = classify_trajectories(df, n_dims)
     ids    = sort(unique(df.trajectory_id))
     result = Dict{Int, Float64}()
 
     for (j, tid) in enumerate(ids)
-        target_attractor = attractors[labels[j]]
+        lbl              = labels[j]
+        target_attractor = attractors[lbl]
+        ε                = lbl == 1 ? ε_on : ε_off
+
         traj = sort(filter(r -> r.trajectory_id == tid, df), :time)
 
         times = traj.time
@@ -281,8 +324,9 @@ function compute_convergence_times(df::DataFrame, n_dims::Int,
         # Compute distance to target attractor at each time step
         dists = [norm(states[t, :] .- target_attractor) for t in 1:n_pts]
 
-        # Find first time step where distance stays ≤ ε for all remaining steps
-        conv_time = times[end]  # default: last time step
+        # Find first time step where distance stays ≤ ε for all remaining steps.
+        # Returns NaN if the trajectory never converges (do not count in mean).
+        conv_time = NaN
         for t in 1:n_pts
             if all(dists[t:end] .<= ε)
                 conv_time = times[t]
@@ -301,35 +345,45 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 
 """
-    compute_edge_to_attractor_distances(df, n_dims, attractors) → Dict{Int, Float64}
+    compute_edge_to_attractor_distances(df, n_dims, attractors;
+                                        edge_state=nothing) → Dict{Int, Float64}
 
-For each trajectory, compute the Euclidean distance from the initial state
-(the edge/saddle state at t=1) to the trajectory's target attractor.
+Compute the Euclidean distance from the edge state to each trajectory's target
+attractor in EOF space.
 
-This measures how far the edge state is from each attractor in EOF space.
+When `edge_state` is provided it is used as the single shared edge-state
+position (e.g. loaded from a converged `_ed.etc.nc` file).  When it is
+`nothing` the initial state (t=1) of each individual trajectory is used
+instead (legacy behaviour).
 
 # Arguments
 - `df`:         DataFrame from `load_plasim_trajectories`
 - `n_dims`:     number of EOF dimensions
 - `attractors`: Dict from `estimate_attractors`
+- `edge_state`: optional pre-computed edge-state vector (length n_dims);
+                if provided, overrides the per-trajectory initial state
 
 # Returns
 Dict mapping `trajectory_id => distance_from_edge_to_attractor`.
 """
 function compute_edge_to_attractor_distances(df::DataFrame, n_dims::Int,
-                                              attractors::Dict{Int, Vector{Float64}})
+                                              attractors::Dict{Int, Vector{Float64}};
+                                              edge_state::Union{Nothing, Vector{Float64}} = nothing)
     labels = classify_trajectories(df, n_dims)
     ids    = sort(unique(df.trajectory_id))
     result = Dict{Int, Float64}()
 
     for (j, tid) in enumerate(ids)
         target_attractor = attractors[labels[j]]
-        traj = sort(filter(r -> r.trajectory_id == tid, df), :time)
 
-        # Edge state = initial state (first time step)
-        edge_state = [traj[1, Symbol("x$k")] for k in 1:n_dims]
+        es = if edge_state !== nothing
+            edge_state
+        else
+            traj = sort(filter(r -> r.trajectory_id == tid, df), :time)
+            [traj[1, Symbol("x$k")] for k in 1:n_dims]
+        end
 
-        result[tid] = norm(edge_state .- target_attractor)
+        result[tid] = norm(es .- target_attractor)
     end
 
     return result
@@ -340,35 +394,54 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 
 """
-    plasim_resilience_summary(df, n_dims; final_fraction=0.1, ε=0.05) → NamedTuple
+    plasim_resilience_summary(df, n_dims;
+                               final_fraction=0.1, ε_on=0.05, ε_off=0.05,
+                               attractors=nothing,
+                               edge_state=nothing) → NamedTuple
 
 Convenience wrapper that computes all PlaSim resilience diagnostics.
 
 Calls `classify_trajectories`, `estimate_attractors`, `compute_convergence_times`,
 and `compute_edge_to_attractor_distances`, then aggregates the results.
 
+When `attractors` is supplied (a `Dict{Int,Vector{Float64}}` with keys 1=on,
+2=off) it is used directly instead of being estimated from the final states of
+edgetrack trajectories.  Supply this from the converged `_on.etc.nc` /
+`_off.etc.nc` files for more accurate attractor positions.
+
+When `edge_state` is supplied (a `Vector{Float64}`) it is used as the shared
+edge-state position for all distance calculations instead of the per-trajectory
+initial states.  Supply this from the converged `_ed.etc.nc` file.
+
 # Returns
 A NamedTuple with fields:
 - `attractor_labels::Vector{Int}`      — per-trajectory label (1=on, 2=off)
 - `trajectory_ids::Vector{Int}`        — corresponding trajectory IDs
-- `attractors::Dict{Int,Vector{Float64}}` — estimated attractor positions
-- `convergence_times::Dict{Int,Float64}`  — per-trajectory convergence times
+- `attractors::Dict{Int,Vector{Float64}}` — attractor positions used
+- `convergence_times::Dict{Int,Float64}`  — per-trajectory convergence times (NaN = not converged)
+- `converged::Dict{Int,Bool}`             — whether each trajectory converged
 - `edge_distances::Dict{Int,Float64}`     — edge-to-attractor distances
 - `n_on::Int`                           — number of AMOC-on trajectories
 - `n_off::Int`                          — number of AMOC-off trajectories
-- `mean_conv_time_on::Float64`          — mean convergence time for AMOC-on
-- `mean_conv_time_off::Float64`         — mean convergence time for AMOC-off
+- `mean_conv_time_on::Float64`          — mean convergence time for AMOC-on (NaN if none converged)
+- `mean_conv_time_off::Float64`         — mean convergence time for AMOC-off (NaN if none converged)
+- `n_converged_on::Int`                 — number of AMOC-on trajectories that converged within ε_on
+- `n_converged_off::Int`                — number of AMOC-off trajectories that converged within ε_off
 - `mean_dist_on::Float64`               — mean edge distance for AMOC-on
 - `mean_dist_off::Float64`              — mean edge distance for AMOC-off
+- `edge_state::Union{Nothing,Vector{Float64}}` — edge-state position used
 """
 function plasim_resilience_summary(df::DataFrame, n_dims::Int;
                                     final_fraction::Float64 = 0.1,
-                                    ε::Float64 = 0.05)
+                                    ε_on::Float64  = 0.05,
+                                    ε_off::Float64 = 0.05,
+                                    attractors::Union{Nothing, Dict{Int, Vector{Float64}}} = nothing,
+                                    edge_state::Union{Nothing, Vector{Float64}} = nothing)
     ids    = sort(unique(df.trajectory_id))
     labels = classify_trajectories(df, n_dims; final_fraction)
-    attrs  = estimate_attractors(df, n_dims; final_fraction)
-    conv_t = compute_convergence_times(df, n_dims, attrs; ε)
-    edist  = compute_edge_to_attractor_distances(df, n_dims, attrs)
+    attrs  = attractors !== nothing ? attractors : estimate_attractors(df, n_dims; final_fraction)
+    conv_t = compute_convergence_times(df, n_dims, attrs; ε_on, ε_off)
+    edist  = compute_edge_to_attractor_distances(df, n_dims, attrs; edge_state)
 
     on_idx  = findall(==(1), labels)
     off_idx = findall(==(2), labels)
@@ -379,8 +452,15 @@ function plasim_resilience_summary(df::DataFrame, n_dims::Int;
     n_on  = length(on_idx)
     n_off = length(off_idx)
 
-    mean_conv_on  = n_on  > 0 ? mean(conv_t[tid] for tid in on_ids)  : NaN
-    mean_conv_off = n_off > 0 ? mean(conv_t[tid] for tid in off_ids) : NaN
+    # Bool lookup: did each trajectory converge?
+    converged = Dict{Int, Bool}(tid => !isnan(conv_t[tid]) for tid in ids)
+
+    # Only include trajectories that actually converged (conv_time != NaN)
+    on_conv_times  = filter(!isnan, [conv_t[tid] for tid in on_ids])
+    off_conv_times = filter(!isnan, [conv_t[tid] for tid in off_ids])
+
+    mean_conv_on  = isempty(on_conv_times)  ? NaN : mean(on_conv_times)
+    mean_conv_off = isempty(off_conv_times) ? NaN : mean(off_conv_times)
 
     mean_dist_on  = n_on  > 0 ? mean(edist[tid] for tid in on_ids)  : NaN
     mean_dist_off = n_off > 0 ? mean(edist[tid] for tid in off_ids) : NaN
@@ -390,12 +470,127 @@ function plasim_resilience_summary(df::DataFrame, n_dims::Int;
         trajectory_ids     = ids,
         attractors         = attrs,
         convergence_times  = conv_t,
+        converged          = converged,
         edge_distances     = edist,
         n_on               = n_on,
         n_off              = n_off,
+        n_converged_on     = length(on_conv_times),
+        n_converged_off    = length(off_conv_times),
         mean_conv_time_on  = mean_conv_on,
         mean_conv_time_off = mean_conv_off,
         mean_dist_on       = mean_dist_on,
         mean_dist_off      = mean_dist_off,
+        edge_state         = edge_state,
+    )
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Local variability around equilibria
+# ─────────────────────────────────────────────────────────────────────────────
+
+"""
+    load_plasim_state_timeseries(filepath, variable_names) → Matrix{Float64}
+
+Load a converged-state NetCDF file and return the full time series as a
+matrix of shape `(n_time × n_dims)`.  NaN rows (NetCDF fill values) are
+kept so that the caller can decide how to handle them.
+"""
+function load_plasim_state_timeseries(filepath::String, variable_names::Vector{String})
+    NCDataset(filepath, "r") do ds
+        n_time = length(ds["time"])
+        mat = Matrix{Float64}(undef, n_time, length(variable_names))
+        for (k, vname) in enumerate(variable_names)
+            mat[:, k] = Float64.(coalesce.(ds[vname][:], NaN))
+        end
+        return mat
+    end
+end
+
+"""
+    _integrated_ac_time(x) → Float64
+
+Estimate the integrated autocorrelation time of a zero-mean time series `x`
+as  τ = 0.5 + Σ_{l=1}^{L} ρ(l), where the sum is truncated at the first
+lag where the autocorrelation function drops below zero.  This is the
+standard estimator used in MCMC diagnostics and CSD analysis.
+"""
+function _integrated_ac_time(x::AbstractVector{<:Real})
+    n   = length(x)
+    τ   = 0.5
+    for l in 1:min(n ÷ 2, 500)
+        ρ = cor(x[1:n-l], x[l+1:n])
+        ρ <= 0 && break
+        τ += ρ
+    end
+    return τ
+end
+
+"""
+    compute_local_variability(filepath, variable_names) → NamedTuple
+
+Compute several measures of local variability from a converged-equilibrium
+NetCDF file (`_on.etc.nc` or `_of.etc.nc`).
+
+The time series is detrended by subtracting its mean before computing
+second-order statistics.
+
+# Measures returned
+- `mean_state::Vector{Float64}`         — time-mean position (attractor estimate)
+- `std_per_dim::Vector{Float64}`        — standard deviation along each EOF axis
+- `total_variance::Float64`             — trace of the covariance matrix
+- `dominant_variance::Float64`          — largest eigenvalue of the covariance matrix
+                                          (variance in the most variable direction)
+- `dominant_direction::Vector{Float64}` — corresponding eigenvector
+- `mean_dist::Float64`                  — mean Euclidean distance from the attractor mean
+- `lag1_autocorr::Vector{Float64}`      — lag-1 autocorrelation per EOF dimension
+                                          (classical CSD indicator; → 1 near tipping)
+- `ac_times::Vector{Float64}`           — integrated autocorrelation time per EOF dim (yr)
+- `mean_lag1_autocorr::Float64`         — mean lag-1 autocorrelation across dims
+- `mean_ac_time::Float64`               — mean integrated autocorrelation time (yr)
+- `n_samples::Int`                      — number of valid (non-NaN) time steps used
+"""
+function compute_local_variability(filepath::String, variable_names::Vector{String})
+    ts_raw = load_plasim_state_timeseries(filepath, variable_names)
+
+    # Drop rows with any NaN
+    valid = [!any(isnan, ts_raw[t, :]) for t in axes(ts_raw, 1)]
+    ts    = ts_raw[valid, :]
+    n, d  = size(ts)
+
+    μ        = vec(mean(ts; dims = 1))
+    centered = ts .- μ'
+
+    # Per-dimension standard deviation
+    std_per_dim = vec(std(ts; dims = 1))
+
+    # Covariance matrix and its eigendecomposition
+    C      = cov(ts)
+    evals  = eigvals(Symmetric(C))        # sorted ascending
+    evecs  = eigvecs(Symmetric(C))
+    dom_idx = argmax(evals)
+    dominant_variance  = evals[dom_idx]
+    dominant_direction = evecs[:, dom_idx]
+
+    total_variance = tr(C)
+
+    # Mean distance from attractor
+    mean_dist = mean(norm(centered[t, :]) for t in 1:n)
+
+    # Lag-1 autocorrelation and integrated autocorrelation time per dimension
+    lag1_autocorr = [cor(centered[1:n-1, k], centered[2:n, k]) for k in 1:d]
+    ac_times      = [_integrated_ac_time(centered[:, k])       for k in 1:d]
+
+    return (
+        mean_state          = μ,
+        std_per_dim         = std_per_dim,
+        total_variance      = total_variance,
+        dominant_variance   = dominant_variance,
+        dominant_direction  = dominant_direction,
+        mean_dist           = mean_dist,
+        lag1_autocorr       = lag1_autocorr,
+        ac_times            = ac_times,
+        mean_lag1_autocorr  = mean(lag1_autocorr),
+        mean_ac_time        = mean(ac_times),
+        n_samples           = n,
     )
 end
