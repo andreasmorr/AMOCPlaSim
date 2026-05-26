@@ -1,21 +1,55 @@
-# Sales Pitch
-Resilience encompasses a range of concepts that describe how a dynamical system responds to perturbations. These concepts differ in both the type of disturbance considered and the aspect of recovery they emphasize. In natural systems, however, most resilience measures are difficult to quantify directly, as controlled experiments are often not feasible. A common alternative is to use numerical models to simulate system responses to perturbations. Yet it remains unclear whether different notions of resilience yield consistent insights across models of varying complexity. We address this question in the context of the Atlantic Meridional Overturning Circulation (AMOC), for which a wide hierarchy of models exists. Our approach combines multiple levels of complexity: we analyze conceptual box models, perform extensive trajectory simulations with the intermediate-complexity model CLIMBER-X, and investigate transient and equilibrium dynamics with respect to the AMOC “on” and “off” regimes using the general circulation model PlaSim. Our goal is to determine whether and which resilience metrics exhibit coherent trends under climate change, which is expected to push the AMOC closer to a potential tipping point. If multiple resilience indicators consistently signal a loss of stability across models and datasets, they may serve as robust early-warning indicators of such a transition.
+# AMOCPlaSim
 
-# Tasks
-## 3-box Model
-Wood et al. and later Alkhayuon et al. parametrize a 3-box model of the AMOC. They do this for a 1xCO2 setting and a 2xCO2 setting. Interpolating between these two parameter configurations of the box model gives us a continuum of AMOC models under increasing CO2. We can investigate sample models from this continuum for resilience using the Attractors.jl stability measures functionality. This gives us a resilience trend from each employed measure, which can then be compared to the results from models higher up in the hierarchy.
+Edge-state and equilibrium analysis of the AMOC in the general circulation model PlaSim, using Gaussian covariance ellipsoids in EOF space as state-space boundaries.
 
-## CLIMBER-X
-We run many trajectories in the CLIMBER-X model starting from perturbed states away from the stable AMOC on state. These perturbations should be of a particular nature, changing salinity across large coherent parts of the ocean (similar to the boxes from the box-model). This way, we can map out basins of attraction in this more complex model and assess their relative sizes and geometries, in addtion to transient characteristics of the model runs. Locally around the stable AMOC state, we can also assess the linear stability from equilirbium runs. This yields comparable information to that from the box model experiments.
+Bisection trajectories from the saddle (edge) state to either the AMOC-on or AMOC-off attractor are available at pre-industrial (285 ppm) and current (360 ppm) CO₂ levels. Long equilibrium runs at all three states (on, off, edge) are used to fit Gaussian distributions in EOF space and to compute local stability metrics.
 
-## PlaSim
-We have high-dimensional trajectories that are reduced to dominant EOFs (physically similar to boxes from above) that go from the saddle (edge) state to either the on or the off state of the AMOC. Trajectories are available for pre-industrial (285 ppm) and current (360 ppm) CO2 levels. In addition to the bisection trajectories, we have long equilibrium runs at the AMOC-on, AMOC-off, and edge states for both CO2 levels.
+## File structure
 
-The equilibrium runs are used to fit a Gaussian distribution to each state in EOF space. The resulting covariance ellipsoids (at a chosen nσ level, currently 3σ) define the boundaries of each state and are used for two key metrics:
+```
+AMOCPlaSim/
+├── scripts/
+│   └── plasim_edge_analysis.jl        # Main analysis script
+├── src/
+│   └── plasim_utils.jl                # NetCDF loading, EOF projection, ellipsoid fitting
+├── data/
+│   └── plasim/
+│       ├── resilience_metrics.csv     # Key metrics for all states and CO2 levels
+│       └── resilience_summaries.jld2  # Full cached results
+├── Project.toml
+└── Manifest.toml
+```
 
-- **Convergence time**: the transit time from the last step a trajectory is inside the edge-state ellipse to the first step it enters the target attractor ellipse, evaluated in the 2D space of the first two EOFs. Trajectories that never visited the edge ellipse are excluded.
-- **Edge-to-attractor distance**: the gap between the surfaces of the edge-state and attractor ellipsoids (zero if they overlap).
+## Analysis
 
-The equilibrium runs are also used to assess local stability via variance, dominant variance, lag-1 autocorrelation, and integrated autocorrelation time per EOF dimension. Mean AMOC strength is read directly from the equilibrium NetCDF files.
+### `plasim_edge_analysis.jl`
+For each CO₂ level (285 ppm, 360 ppm) the script:
+1. Loads all NetCDF edge-track files and classifies trajectories as converging to AMOC-on or AMOC-off.
+2. Loads attractor and edge-state positions from converged equilibrium files.
+3. Fits Gaussian covariance ellipsoids (at a chosen nσ level, default 3σ) to each state in EOF space.
+4. Computes two primary resilience metrics:
+   - **Convergence time**: transit time from last visit inside the edge ellipse to first entry into the target attractor ellipse (in the EOF1–EOF2 plane).
+   - **Edge-to-attractor distance**: gap between the surfaces of the edge and attractor ellipsoids (zero if overlapping).
+5. Computes local stability metrics from equilibrium runs: variance, dominant variance, lag-1 autocorrelation, integrated autocorrelation time per EOF, and mean AMOC strength from NetCDF output.
+6. Produces scatter plots in EOF space, bar charts of convergence times and edge distances, and saves all key metrics to `data/plasim/resilience_metrics.csv`.
 
-All key metrics (mean convergence time, edge distance, 1σ ellipsoid volume, mean AMOC strength) for the AMOC-on and AMOC-off states at both CO2 levels are saved to `data/plasim/resilience_metrics.csv`.
+### `plasim_utils.jl`
+Utility functions for loading and pre-processing PlaSim NetCDF files, projecting fields onto EOFs, and fitting/evaluating Gaussian ellipsoids.
+
+## Usage
+
+Edit the `DATA_DIR` and `N_FILES_*` constants at the top of `plasim_edge_analysis.jl` to point to your NetCDF data, then run from the project root:
+
+```bash
+julia --project scripts/plasim_edge_analysis.jl
+```
+
+Results are cached in `data/plasim/` and figures are written to `plots/`.
+
+## Dependencies
+
+Julia with [DrWatson](https://juliadynamics.github.io/DrWatson.jl/stable/), [NCDatasets.jl](https://alexander-barth.github.io/NCDatasets.jl/stable/), [DataFrames.jl](https://dataframes.juliadata.org/stable/), and [CairoMakie](https://makie.org/). Install with:
+
+```julia
+using Pkg; Pkg.instantiate()
+```
