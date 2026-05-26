@@ -30,6 +30,45 @@ using Statistics
 using LinearAlgebra
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Gaussian-ellipse helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+"""
+    _in_ellipse(x, μ, C_inv; sigma=1) → Bool
+
+Return `true` if point `x` lies inside the nσ Gaussian ellipse/ellipsoid
+defined by mean `μ` and precision matrix `C_inv` (inverse covariance).
+
+The criterion is the Mahalanobis distance: (x-μ)ᵀ C⁻¹ (x-μ) ≤ sigma².
+"""
+function _in_ellipse(x::AbstractVector, μ::AbstractVector, C_inv::AbstractMatrix;
+                     sigma::Real = 1)
+    d = x .- μ
+    return dot(d, C_inv * d) ≤ Float64(sigma)^2
+end
+
+"""
+    ellipse_to_ellipse_distance(μ1, C1, μ2, C2; sigma=1) → Float64
+
+Distance between the surfaces of two nσ Gaussian ellipsoids.
+
+Computed as: max(0, ‖μ2-μ1‖ − σ·r1(v) − σ·r2(v)), where v is the unit
+vector from μ1 to μ2 and r(v) = 1/√(vᵀ C⁻¹ v) is the 1σ radius along v.
+Returns 0 when the ellipsoids overlap.
+"""
+function ellipse_to_ellipse_distance(μ1::Vector{Float64}, C1::Matrix{Float64},
+                                      μ2::Vector{Float64}, C2::Matrix{Float64};
+                                      sigma::Real = 1)
+    dir       = μ2 .- μ1
+    d_centers = norm(dir)
+    d_centers == 0.0 && return 0.0
+    v  = dir ./ d_centers
+    r1 = Float64(sigma) / sqrt(dot(v, Symmetric(C1) \ v))
+    r2 = Float64(sigma) / sqrt(dot(v, Symmetric(C2) \ v))
+    return max(0.0, d_centers - r1 - r2)
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Data loading
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -279,62 +318,94 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 
 """
-    compute_convergence_times(df, n_dims, attractors; ε_on=0.05, ε_off=0.05) → Dict{Int, Float64}
+    compute_convergence_times(df, n_dims, attractors; ...) → Dict{Int, Float64}
 
-For each trajectory, find the first time step at which the trajectory enters
-and stays within the convergence threshold (Euclidean distance) of its target
-attractor.  Separate thresholds are used for AMOC-on (`ε_on`) and AMOC-off
-(`ε_off`) to account for different attractor sizes.
+For each trajectory, compute the convergence time as the span between:
+  - the first step when the trajectory exits the edge-state 1σ ellipsoid, and
+  - the first step when it enters (and stays inside) the target attractor's 1σ ellipsoid.
 
-"Stays within" means all subsequent time steps also remain within the threshold
-(to avoid transient close passes).
-
-If a trajectory never converges, its convergence time is NaN (excluded from means).
+This ellipse-based definition requires `cov_on`, `cov_off`, `edge_state`, and
+`edge_cov` to be supplied.  When any of these is `nothing` the function falls
+back to the legacy behaviour: time to first step where Euclidean distance to
+the attractor mean stays ≤ ε for all remaining steps.
 
 # Arguments
-- `df`:         DataFrame from `load_plasim_trajectories`
-- `n_dims`:     number of EOF dimensions
-- `attractors`: Dict from `estimate_attractors`
-- `ε_on`:       convergence threshold for AMOC-on trajectories (EOF units)
-- `ε_off`:      convergence threshold for AMOC-off trajectories (EOF units)
+- `df`, `n_dims`, `attractors`: as before
+- `ε_on`, `ε_off`:   fallback ε-ball radii (used only when covariances are absent)
+- `cov_on`:    covariance matrix of the AMOC-on equilibrium run (n_dims × n_dims)
+- `cov_off`:   covariance matrix of the AMOC-off equilibrium run
+- `edge_state`: mean position of the edge equilibrium run
+- `edge_cov`:  covariance matrix of the edge equilibrium run
 
 # Returns
 Dict mapping `trajectory_id => convergence_time` (NaN if not converged).
+When ellipse mode is active, the time is measured in the same units as
+`df.time` (steps from edge-exit to attractor-entry).
 """
 function compute_convergence_times(df::DataFrame, n_dims::Int,
                                     attractors::Dict{Int, Vector{Float64}};
-                                    ε_on::Float64 = 0.05, ε_off::Float64 = 0.05)
+                                    ε_on::Float64 = 0.05, ε_off::Float64 = 0.05,
+                                    cov_on::Union{Nothing, Matrix{Float64}}    = nothing,
+                                    cov_off::Union{Nothing, Matrix{Float64}}   = nothing,
+                                    edge_state::Union{Nothing, Vector{Float64}} = nothing,
+                                    edge_cov::Union{Nothing, Matrix{Float64}}  = nothing,
+                                    sigma::Real = 1,
+                                    check_dims::Int = 2)
+    use_ellipses = (cov_on !== nothing && cov_off !== nothing &&
+                    edge_state !== nothing && edge_cov !== nothing)
+
     labels = classify_trajectories(df, n_dims)
     ids    = sort(unique(df.trajectory_id))
     result = Dict{Int, Float64}()
 
+    # Slice covariances and means to the first check_dims dimensions
+    d = check_dims
+    C_on_inv  = use_ellipses ? Matrix(inv(Symmetric(cov_on[1:d, 1:d])))  : nothing
+    C_off_inv = use_ellipses ? Matrix(inv(Symmetric(cov_off[1:d, 1:d]))) : nothing
+    C_ed_inv  = use_ellipses ? Matrix(inv(Symmetric(edge_cov[1:d, 1:d]))) : nothing
+
     for (j, tid) in enumerate(ids)
         lbl              = labels[j]
-        target_attractor = attractors[lbl]
-        ε                = lbl == 1 ? ε_on : ε_off
+        target_attractor = attractors[lbl][1:d]
 
-        traj = sort(filter(r -> r.trajectory_id == tid, df), :time)
+        traj   = sort(filter(r -> r.trajectory_id == tid, df), :time)
+        times  = traj.time
+        n_pts  = nrow(traj)
+        states = hcat([traj[:, Symbol("x$k")] for k in 1:d]...)
 
-        times = traj.time
-        n_pts = nrow(traj)
+        if use_ellipses
+            C_att_inv = lbl == 1 ? C_on_inv : C_off_inv
+            ed_mean   = edge_state[1:d]
 
-        # Build matrix of states: (n_pts × n_dims)
-        states = hcat([traj[:, Symbol("x$k")] for k in 1:n_dims]...)
-
-        # Compute distance to target attractor at each time step
-        dists = [norm(states[t, :] .- target_attractor) for t in 1:n_pts]
-
-        # Find first time step where distance stays ≤ ε for all remaining steps.
-        # Returns NaN if the trajectory never converges (do not count in mean).
-        conv_time = NaN
-        for t in 1:n_pts
-            if all(dists[t:end] .<= ε)
-                conv_time = times[t]
-                break
+            # Last step inside the edge ellipse (final departure point)
+            # If the trajectory never entered the edge ellipse, exclude it (NaN)
+            t_exit_idx = findlast(t -> _in_ellipse(states[t, :], ed_mean, C_ed_inv; sigma), 1:n_pts)
+            if t_exit_idx === nothing
+                result[tid] = NaN
+                continue
             end
-        end
 
-        result[tid] = conv_time
+            # First step inside the attractor ellipse after t_exit
+            conv_time = NaN
+            for t in t_exit_idx:n_pts
+                if _in_ellipse(states[t, :], target_attractor, C_att_inv; sigma)
+                    conv_time = times[t] - times[t_exit_idx]
+                    break
+                end
+            end
+            result[tid] = conv_time
+        else
+            ε     = lbl == 1 ? ε_on : ε_off
+            dists = [norm(states[t, :] .- target_attractor) for t in 1:n_pts]
+            conv_time = NaN
+            for t in 1:n_pts
+                if all(dists[t:end] .<= ε)
+                    conv_time = times[t]
+                    break
+                end
+            end
+            result[tid] = conv_time
+        end
     end
 
     return result
@@ -345,45 +416,56 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 
 """
-    compute_edge_to_attractor_distances(df, n_dims, attractors;
-                                        edge_state=nothing) → Dict{Int, Float64}
+    compute_edge_to_attractor_distances(df, n_dims, attractors; ...) → Dict{Int, Float64}
 
-Compute the Euclidean distance from the edge state to each trajectory's target
-attractor in EOF space.
+Compute the distance from the edge state to each trajectory's target attractor.
 
-When `edge_state` is provided it is used as the single shared edge-state
-position (e.g. loaded from a converged `_ed.etc.nc` file).  When it is
-`nothing` the initial state (t=1) of each individual trajectory is used
-instead (legacy behaviour).
+When `cov_on`, `cov_off`, `edge_state`, and `edge_cov` are all provided the
+distance is the **ellipse-to-ellipse gap**: the distance between the surfaces
+of the two 1σ Gaussian ellipsoids (zero when they overlap).
 
-# Arguments
-- `df`:         DataFrame from `load_plasim_trajectories`
-- `n_dims`:     number of EOF dimensions
-- `attractors`: Dict from `estimate_attractors`
-- `edge_state`: optional pre-computed edge-state vector (length n_dims);
-                if provided, overrides the per-trajectory initial state
+When covariances are absent the function falls back to the legacy Euclidean
+distance between the edge-state mean (or trajectory initial state) and the
+attractor mean.
 
 # Returns
-Dict mapping `trajectory_id => distance_from_edge_to_attractor`.
+Dict mapping `trajectory_id => distance`.  In ellipse mode all trajectories
+converging to the same attractor share the same value.
 """
 function compute_edge_to_attractor_distances(df::DataFrame, n_dims::Int,
                                               attractors::Dict{Int, Vector{Float64}};
-                                              edge_state::Union{Nothing, Vector{Float64}} = nothing)
+                                              edge_state::Union{Nothing, Vector{Float64}} = nothing,
+                                              cov_on::Union{Nothing, Matrix{Float64}}    = nothing,
+                                              cov_off::Union{Nothing, Matrix{Float64}}   = nothing,
+                                              edge_cov::Union{Nothing, Matrix{Float64}}  = nothing,
+                                              sigma::Real = 1,
+                                              check_dims::Int = 2)
+    use_ellipses = (cov_on !== nothing && cov_off !== nothing &&
+                    edge_state !== nothing && edge_cov !== nothing)
+
+    d      = check_dims
     labels = classify_trajectories(df, n_dims)
     ids    = sort(unique(df.trajectory_id))
     result = Dict{Int, Float64}()
 
     for (j, tid) in enumerate(ids)
-        target_attractor = attractors[labels[j]]
+        lbl              = labels[j]
+        target_attractor = attractors[lbl]
 
-        es = if edge_state !== nothing
-            edge_state
+        if use_ellipses
+            C_att = lbl == 1 ? cov_on[1:d, 1:d] : cov_off[1:d, 1:d]
+            result[tid] = ellipse_to_ellipse_distance(
+                edge_state[1:d], edge_cov[1:d, 1:d],
+                target_attractor[1:d], C_att; sigma)
         else
-            traj = sort(filter(r -> r.trajectory_id == tid, df), :time)
-            [traj[1, Symbol("x$k")] for k in 1:n_dims]
+            es = if edge_state !== nothing
+                edge_state
+            else
+                traj = sort(filter(r -> r.trajectory_id == tid, df), :time)
+                [traj[1, Symbol("x$k")] for k in 1:n_dims]
+            end
+            result[tid] = norm(es .- target_attractor)
         end
-
-        result[tid] = norm(es .- target_attractor)
     end
 
     return result
@@ -436,12 +518,19 @@ function plasim_resilience_summary(df::DataFrame, n_dims::Int;
                                     ε_on::Float64  = 0.05,
                                     ε_off::Float64 = 0.05,
                                     attractors::Union{Nothing, Dict{Int, Vector{Float64}}} = nothing,
-                                    edge_state::Union{Nothing, Vector{Float64}} = nothing)
+                                    edge_state::Union{Nothing, Vector{Float64}} = nothing,
+                                    cov_on::Union{Nothing, Matrix{Float64}}    = nothing,
+                                    cov_off::Union{Nothing, Matrix{Float64}}   = nothing,
+                                    edge_cov::Union{Nothing, Matrix{Float64}}  = nothing,
+                                    sigma::Real = 1,
+                                    check_dims::Int = 2)
     ids    = sort(unique(df.trajectory_id))
     labels = classify_trajectories(df, n_dims; final_fraction)
     attrs  = attractors !== nothing ? attractors : estimate_attractors(df, n_dims; final_fraction)
-    conv_t = compute_convergence_times(df, n_dims, attrs; ε_on, ε_off)
-    edist  = compute_edge_to_attractor_distances(df, n_dims, attrs; edge_state)
+    conv_t = compute_convergence_times(df, n_dims, attrs;
+                 ε_on, ε_off, cov_on, cov_off, edge_state, edge_cov, sigma, check_dims)
+    edist  = compute_edge_to_attractor_distances(df, n_dims, attrs;
+                 edge_state, cov_on, cov_off, edge_cov, sigma, check_dims)
 
     on_idx  = findall(==(1), labels)
     off_idx = findall(==(2), labels)
@@ -582,6 +671,7 @@ function compute_local_variability(filepath::String, variable_names::Vector{Stri
 
     return (
         mean_state          = μ,
+        covariance          = C,
         std_per_dim         = std_per_dim,
         total_variance      = total_variance,
         dominant_variance   = dominant_variance,

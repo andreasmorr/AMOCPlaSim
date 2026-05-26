@@ -29,6 +29,8 @@ include(srcdir("plasim_utils.jl"))
 using DataFrames
 using CairoMakie
 using Statistics
+using LinearAlgebra
+using CSV
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Configuration — adjust paths and counts to your data layout
@@ -56,6 +58,9 @@ const EPSILON_OFF = 0.2   # threshold for AMOC-off trajectories
 # Fraction of trajectory end used to classify trajectories (not for attractor
 # estimation — attractor positions come from the dedicated equilibrium files)
 const FINAL_FRACTION = 0.1
+
+# Number of standard deviations for Gaussian ellipse plots and ellipse-based metrics
+const ELLIPSE_SIGMA = 3
 
 # ─────────────────────────────────────────────────────────────────────────────
 # File pattern helpers
@@ -107,6 +112,17 @@ edge_285    = load_plasim_state_mean(
     VARIABLE_NAMES)
 attractors_285 = Dict{Int, Vector{Float64}}(1 => att_on_285, 2 => att_off_285)
 
+# Full time series for the equilibrium runs (used for trajectory plots)
+ts_on_285  = load_plasim_state_timeseries(
+    joinpath(DATA_DIR, "plasimelancholia_$(CO2_LABEL_PREINDUSTRIAL)_on.etc.nc"),
+    VARIABLE_NAMES)
+ts_off_285 = load_plasim_state_timeseries(
+    joinpath(DATA_DIR, "plasimelancholia_$(CO2_LABEL_PREINDUSTRIAL)_of.etc.nc"),
+    VARIABLE_NAMES)
+ts_ed_285  = load_plasim_state_timeseries(
+    joinpath(DATA_DIR, "plasimelancholia_$(CO2_LABEL_PREINDUSTRIAL)_ed.etc.nc"),
+    VARIABLE_NAMES)
+
 @info "Loading converged equilibrium states for 360 ppm..."
 att_on_360  = load_plasim_state_mean(
     joinpath(DATA_DIR, "plasimelancholia_$(CO2_LABEL_CURRENT)_on.etc.nc"),
@@ -119,6 +135,37 @@ edge_360    = load_plasim_state_mean(
     VARIABLE_NAMES)
 attractors_360 = Dict{Int, Vector{Float64}}(1 => att_on_360, 2 => att_off_360)
 
+# Full time series for the equilibrium runs (used for trajectory plots)
+ts_on_360  = load_plasim_state_timeseries(
+    joinpath(DATA_DIR, "plasimelancholia_$(CO2_LABEL_CURRENT)_on.etc.nc"),
+    VARIABLE_NAMES)
+ts_off_360 = load_plasim_state_timeseries(
+    joinpath(DATA_DIR, "plasimelancholia_$(CO2_LABEL_CURRENT)_of.etc.nc"),
+    VARIABLE_NAMES)
+ts_ed_360  = load_plasim_state_timeseries(
+    joinpath(DATA_DIR, "plasimelancholia_$(CO2_LABEL_CURRENT)_ed.etc.nc"),
+    VARIABLE_NAMES)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Local variability (covariance matrices needed for ellipse-based metrics)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@info "Computing local variability for 285 ppm..."
+var_on_285  = compute_local_variability(
+    joinpath(DATA_DIR, "plasimelancholia_$(CO2_LABEL_PREINDUSTRIAL)_on.etc.nc"), VARIABLE_NAMES)
+var_off_285 = compute_local_variability(
+    joinpath(DATA_DIR, "plasimelancholia_$(CO2_LABEL_PREINDUSTRIAL)_of.etc.nc"), VARIABLE_NAMES)
+var_ed_285  = compute_local_variability(
+    joinpath(DATA_DIR, "plasimelancholia_$(CO2_LABEL_PREINDUSTRIAL)_ed.etc.nc"), VARIABLE_NAMES)
+
+@info "Computing local variability for 360 ppm..."
+var_on_360  = compute_local_variability(
+    joinpath(DATA_DIR, "plasimelancholia_$(CO2_LABEL_CURRENT)_on.etc.nc"), VARIABLE_NAMES)
+var_off_360 = compute_local_variability(
+    joinpath(DATA_DIR, "plasimelancholia_$(CO2_LABEL_CURRENT)_of.etc.nc"), VARIABLE_NAMES)
+var_ed_360  = compute_local_variability(
+    joinpath(DATA_DIR, "plasimelancholia_$(CO2_LABEL_CURRENT)_ed.etc.nc"), VARIABLE_NAMES)
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Run resilience summary for both CO2 levels
 # ─────────────────────────────────────────────────────────────────────────────
@@ -130,6 +177,11 @@ summary_285 = plasim_resilience_summary(df_285, N_DIMS;
     ε_off          = EPSILON_OFF,
     attractors     = attractors_285,
     edge_state     = edge_285,
+    cov_on         = var_on_285.covariance,
+    cov_off        = var_off_285.covariance,
+    edge_cov       = var_ed_285.covariance,
+    sigma          = ELLIPSE_SIGMA,
+    check_dims     = 2,
 )
 
 @info "Computing resilience summary for 360 ppm..."
@@ -139,6 +191,11 @@ summary_360 = plasim_resilience_summary(df_360, N_DIMS;
     ε_off          = EPSILON_OFF,
     attractors     = attractors_360,
     edge_state     = edge_360,
+    cov_on         = var_on_360.covariance,
+    cov_off        = var_off_360.covariance,
+    edge_cov       = var_ed_360.covariance,
+    sigma          = ELLIPSE_SIGMA,
+    check_dims     = 2,
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -176,6 +233,9 @@ function traj_x1x2x3(df::DataFrame, tid::Int)
     return sub.x1, sub.x2, sub.x3
 end
 
+# Return a Bool mask selecting rows of a time-series matrix that have no NaN
+valid_rows(ts::Matrix) = [!any(isnan, ts[t, :]) for t in axes(ts, 1)]
+
 # Return (x, y) points tracing a circle of given radius around (cx, cy)
 function circle_points(cx, cy, r; n = 120)
     θ = LinRange(0, 2π, n + 1)
@@ -192,15 +252,51 @@ function sphere_surface(cx, cy, cz, r; n = 40)
     return X, Y, Z
 end
 
+# Return (x, y) points tracing the n-sigma contour of a 2D Gaussian fitted to ts[:,dim1] and ts[:,dim2]
+function gaussian_ellipse_points(ts::Matrix, dim1::Int = 1, dim2::Int = 2; n = 120, sigma = 1)
+    valid = [!any(isnan, ts[t, :]) for t in axes(ts, 1)]
+    data  = ts[valid, [dim1, dim2]]
+    μ     = vec(mean(data, dims = 1))
+    C     = cov(data)
+    vals, vecs = eigen(Symmetric(C))
+    vals  = max.(vals, 0.0)   # guard against tiny negative floats
+    θ     = LinRange(0, 2π, n + 1)
+    # unit circle scaled by sigma * sqrt(eigenvalues), then rotated to data frame
+    pts   = vecs * (sigma .* sqrt.(vals) .* [cos.(θ)'; sin.(θ)'])
+    return μ[1] .+ pts[1, :], μ[2] .+ pts[2, :]
+end
+
+# Return (X, Y, Z) surface matrices for the n-sigma ellipsoid of a 3D Gaussian fitted to ts[:,1:3]
+function gaussian_ellipsoid_surface(ts::Matrix; n = 40, sigma = 1)
+    valid = [!any(isnan, ts[t, :]) for t in axes(ts, 1)]
+    data  = ts[valid, 1:3]
+    μ     = vec(mean(data, dims = 1))
+    C     = cov(data)
+    vals, vecs = eigen(Symmetric(C))
+    vals  = max.(vals, 0.0)
+    sv    = sigma .* sqrt.(vals)
+    θ = LinRange(0,  π, n)   # polar
+    φ = LinRange(0, 2π, n)   # azimuthal
+    X = zeros(n, n); Y = zeros(n, n); Z = zeros(n, n)
+    for i in 1:n, j in 1:n
+        v = vecs * (sv .* [sin(θ[i]) * cos(φ[j]), sin(θ[i]) * sin(φ[j]), cos(θ[i])])
+        X[i, j] = μ[1] + v[1]
+        Y[i, j] = μ[2] + v[2]
+        Z[i, j] = μ[3] + v[3]
+    end
+    return X, Y, Z
+end
+
+
 col_on  = :steelblue
 col_off = :firebrick
 col_edge = :black
 
 fig1 = Figure(size = (1400, 600))
 
-for (col_idx, (label, df_plot, summary, edge_st, ids)) in enumerate([
-    ("285 ppm (pre-industrial)", df_285, summary_285, edge_285, ids_285),
-    ("360 ppm (current CO₂)", df_360, summary_360, edge_360, ids_360),
+for (col_idx, (label, df_plot, summary, edge_st, ids, ts_on, ts_off, ts_ed)) in enumerate([
+    ("285 ppm (pre-industrial)", df_285, summary_285, edge_285, ids_285, ts_on_285, ts_off_285, ts_ed_285),
+    ("360 ppm (current CO₂)",   df_360, summary_360, edge_360, ids_360, ts_on_360, ts_off_360, ts_ed_360),
 ])
     ax = Axis(fig1[1, col_idx];
         xlabel    = "1st EOF",
@@ -222,7 +318,7 @@ for (col_idx, (label, df_plot, summary, edge_st, ids)) in enumerate([
         end
     end
 
-    # Overlay attractor mean positions and ε convergence circles
+    # Overlay attractor mean positions and 1σ Gaussian ellipses
     att_on  = summary.attractors[1]
     att_off = summary.attractors[2]
     scatter!(ax, [att_on[1]],  [att_on[2]];  color = col_on,  marker = :star5, markersize = 18,
@@ -230,12 +326,15 @@ for (col_idx, (label, df_plot, summary, edge_st, ids)) in enumerate([
     scatter!(ax, [att_off[1]], [att_off[2]]; color = col_off, marker = :star5, markersize = 18,
              label = "AMOC-off attractor")
 
-    cx_on,  cy_on  = circle_points(att_on[1],  att_on[2],  EPSILON_ON)
-    cx_off, cy_off = circle_points(att_off[1], att_off[2], EPSILON_OFF)
-    lines!(ax, cx_on,  cy_on;  color = (col_on,  0.7), linewidth = 1.2, linestyle = :dot,
-           label = "ε_on = $(EPSILON_ON)")
-    lines!(ax, cx_off, cy_off; color = (col_off, 0.7), linewidth = 1.2, linestyle = :dot,
-           label = "ε_off = $(EPSILON_OFF)")
+    ex_on,  ey_on  = gaussian_ellipse_points(ts_on,  1, 2; sigma = ELLIPSE_SIGMA)
+    ex_off, ey_off = gaussian_ellipse_points(ts_off, 1, 2; sigma = ELLIPSE_SIGMA)
+    ex_ed,  ey_ed  = gaussian_ellipse_points(ts_ed,  1, 2; sigma = ELLIPSE_SIGMA)
+    lines!(ax, ex_on,  ey_on;  color = (col_on,  0.8), linewidth = 1.4, linestyle = :dot,
+           label = "$(ELLIPSE_SIGMA)σ AMOC-on")
+    lines!(ax, ex_off, ey_off; color = (col_off, 0.8), linewidth = 1.4, linestyle = :dot,
+           label = "$(ELLIPSE_SIGMA)σ AMOC-off")
+    lines!(ax, ex_ed,  ey_ed;  color = (col_edge, 0.8), linewidth = 1.4, linestyle = :dot,
+           label = "$(ELLIPSE_SIGMA)σ edge")
 
     # Overlay edge state (single converged position from _ed.etc.nc)
     scatter!(ax, [edge_st[1]], [edge_st[2]];
@@ -267,9 +366,9 @@ wsave(fig1_path, fig1)
 
 fig1b = Figure(size = (1400, 700))
 
-for (col_idx, (label, df_plot, summary, edge_st, ids)) in enumerate([
-    ("285 ppm (pre-industrial)", df_285, summary_285, edge_285, ids_285),
-    ("360 ppm (current CO₂)", df_360, summary_360, edge_360, ids_360),
+for (col_idx, (label, df_plot, summary, edge_st, ids, ts_on, ts_off, ts_ed)) in enumerate([
+    ("285 ppm (pre-industrial)", df_285, summary_285, edge_285, ids_285, ts_on_285, ts_off_285, ts_ed_285),
+    ("360 ppm (current CO₂)",   df_360, summary_360, edge_360, ids_360, ts_on_360, ts_off_360, ts_ed_360),
 ])
     ax3d = Axis3(fig1b[1, col_idx];
         xlabel    = "EOF 1",
@@ -301,11 +400,13 @@ for (col_idx, (label, df_plot, summary, edge_st, ids)) in enumerate([
     scatter!(ax3d, [edge_st[1]], [edge_st[2]], [edge_st[3]];
              color = col_edge, marker = :diamond, markersize = 14, label = "Edge state")
 
-    # Faint ε-spheres around each attractor
-    Xon, Yon, Zon = sphere_surface(att_on[1],  att_on[2],  att_on[3],  EPSILON_ON)
+    # 1σ Gaussian ellipsoids for each state
+    Xon, Yon, Zon = gaussian_ellipsoid_surface(ts_on;  sigma = ELLIPSE_SIGMA)
     surface!(ax3d, Xon, Yon, Zon; color = (col_on,  0.12), shading = NoShading)
-    Xof, Yof, Zof = sphere_surface(att_off[1], att_off[2], att_off[3], EPSILON_OFF)
+    Xof, Yof, Zof = gaussian_ellipsoid_surface(ts_off; sigma = ELLIPSE_SIGMA)
     surface!(ax3d, Xof, Yof, Zof; color = (col_off, 0.12), shading = NoShading)
+    Xed, Yed, Zed = gaussian_ellipsoid_surface(ts_ed;  sigma = ELLIPSE_SIGMA)
+    surface!(ax3d, Xed, Yed, Zed; color = (col_edge, 0.12), shading = NoShading)
 
     axislegend(ax3d; position = :rt, labelsize = 10)
 end
@@ -324,6 +425,132 @@ Legend(fig1b[1, 3],
 fig1b_path = plotsdir("plasim_trajectories_scatter_3d.png")
 wsave(fig1b_path, fig1b)
 @info "Figure 1b saved to: $fig1b_path"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Figure 1c: Equilibrium runs in (EOF1, EOF2) space
+# ─────────────────────────────────────────────────────────────────────────────
+
+fig1c = Figure(size = (1400, 600))
+
+for (col_idx, (label, ts_on, ts_off, ts_ed, summary, edge_st)) in enumerate([
+    ("285 ppm (pre-industrial)", ts_on_285, ts_off_285, ts_ed_285, summary_285, edge_285),
+    ("360 ppm (current CO₂)",   ts_on_360, ts_off_360, ts_ed_360, summary_360, edge_360),
+])
+    ax = Axis(fig1c[1, col_idx];
+        xlabel    = "1st EOF",
+        ylabel    = "2nd EOF",
+        title     = label,
+        titlesize = 13,
+    )
+
+    vm_on  = valid_rows(ts_on)
+    vm_off = valid_rows(ts_off)
+    vm_ed  = valid_rows(ts_ed)
+    lines!(ax, ts_on[vm_on, 1],  ts_on[vm_on, 2];
+           color = (col_on,  0.7), linewidth = 1.2, linestyle = :solid, label = "AMOC-on eq. run")
+    lines!(ax, ts_off[vm_off, 1], ts_off[vm_off, 2];
+           color = (col_off, 0.7), linewidth = 1.2, linestyle = :solid, label = "AMOC-off eq. run")
+    lines!(ax, ts_ed[vm_ed, 1],  ts_ed[vm_ed, 2];
+           color = (col_edge, 0.6), linewidth = 1.0, linestyle = :solid, label = "Edge eq. run")
+
+    att_on  = summary.attractors[1]
+    att_off = summary.attractors[2]
+    scatter!(ax, [att_on[1]],  [att_on[2]];  color = col_on,  marker = :star5, markersize = 18,
+             label = "AMOC-on attractor")
+    scatter!(ax, [att_off[1]], [att_off[2]]; color = col_off, marker = :star5, markersize = 18,
+             label = "AMOC-off attractor")
+    scatter!(ax, [edge_st[1]], [edge_st[2]];
+             color = col_edge, marker = :diamond, markersize = 14, label = "Edge state")
+
+    ex_on,  ey_on  = gaussian_ellipse_points(ts_on,  1, 2; sigma = ELLIPSE_SIGMA)
+    ex_off, ey_off = gaussian_ellipse_points(ts_off, 1, 2; sigma = ELLIPSE_SIGMA)
+    ex_ed,  ey_ed  = gaussian_ellipse_points(ts_ed,  1, 2; sigma = ELLIPSE_SIGMA)
+    lines!(ax, ex_on,  ey_on;  color = (col_on,  0.8), linewidth = 1.4, linestyle = :dot,
+           label = "$(ELLIPSE_SIGMA)σ AMOC-on")
+    lines!(ax, ex_off, ey_off; color = (col_off, 0.8), linewidth = 1.4, linestyle = :dot,
+           label = "$(ELLIPSE_SIGMA)σ AMOC-off")
+    lines!(ax, ex_ed,  ey_ed;  color = (col_edge, 0.8), linewidth = 1.4, linestyle = :dot,
+           label = "$(ELLIPSE_SIGMA)σ edge")
+
+    axislegend(ax; position = :rt, labelsize = 10)
+end
+
+Legend(fig1c[1, 3],
+    [
+        LineElement(color = col_on,   linestyle = :solid, linewidth = 1.2),
+        LineElement(color = col_off,  linestyle = :solid, linewidth = 1.2),
+        LineElement(color = col_edge, linestyle = :solid, linewidth = 1.0),
+    ],
+    ["AMOC-on eq. run", "AMOC-off eq. run", "Edge eq. run"],
+    "Equilibrium run",
+    labelsize = 11,
+)
+
+fig1c_path = plotsdir("plasim_equilibrium_scatter.png")
+wsave(fig1c_path, fig1c)
+@info "Figure 1c saved to: $fig1c_path"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Figure 1d: Equilibrium runs in (EOF1, EOF2, EOF3) space
+# ─────────────────────────────────────────────────────────────────────────────
+
+fig1d = Figure(size = (1400, 700))
+
+for (col_idx, (label, ts_on, ts_off, ts_ed, summary, edge_st)) in enumerate([
+    ("285 ppm (pre-industrial)", ts_on_285, ts_off_285, ts_ed_285, summary_285, edge_285),
+    ("360 ppm (current CO₂)",   ts_on_360, ts_off_360, ts_ed_360, summary_360, edge_360),
+])
+    ax3d = Axis3(fig1d[1, col_idx];
+        xlabel    = "EOF 1",
+        ylabel    = "EOF 2",
+        zlabel    = "EOF 3",
+        title     = label,
+        titlesize = 13,
+    )
+
+    vm_on  = valid_rows(ts_on)
+    vm_off = valid_rows(ts_off)
+    vm_ed  = valid_rows(ts_ed)
+    lines!(ax3d, ts_on[vm_on, 1],  ts_on[vm_on, 2],  ts_on[vm_on, 3];
+           color = (col_on,  0.7), linewidth = 1.2, linestyle = :solid, label = "AMOC-on eq. run")
+    lines!(ax3d, ts_off[vm_off, 1], ts_off[vm_off, 2], ts_off[vm_off, 3];
+           color = (col_off, 0.7), linewidth = 1.2, linestyle = :solid, label = "AMOC-off eq. run")
+    lines!(ax3d, ts_ed[vm_ed, 1],  ts_ed[vm_ed, 2],   ts_ed[vm_ed, 3];
+           color = (col_edge, 0.6), linewidth = 1.0, linestyle = :solid, label = "Edge eq. run")
+
+    att_on  = summary.attractors[1]
+    att_off = summary.attractors[2]
+    scatter!(ax3d, [att_on[1]],  [att_on[2]],  [att_on[3]];
+             color = col_on,  marker = :star5, markersize = 18, label = "AMOC-on attractor")
+    scatter!(ax3d, [att_off[1]], [att_off[2]], [att_off[3]];
+             color = col_off, marker = :star5, markersize = 18, label = "AMOC-off attractor")
+    scatter!(ax3d, [edge_st[1]], [edge_st[2]], [edge_st[3]];
+             color = col_edge, marker = :diamond, markersize = 14, label = "Edge state")
+
+    Xon, Yon, Zon = gaussian_ellipsoid_surface(ts_on;  sigma = ELLIPSE_SIGMA)
+    surface!(ax3d, Xon, Yon, Zon; color = (col_on,  0.12), shading = NoShading)
+    Xof, Yof, Zof = gaussian_ellipsoid_surface(ts_off; sigma = ELLIPSE_SIGMA)
+    surface!(ax3d, Xof, Yof, Zof; color = (col_off, 0.12), shading = NoShading)
+    Xed, Yed, Zed = gaussian_ellipsoid_surface(ts_ed;  sigma = ELLIPSE_SIGMA)
+    surface!(ax3d, Xed, Yed, Zed; color = (col_edge, 0.12), shading = NoShading)
+
+    axislegend(ax3d; position = :rt, labelsize = 10)
+end
+
+Legend(fig1d[1, 3],
+    [
+        LineElement(color = col_on,   linestyle = :solid, linewidth = 1.2),
+        LineElement(color = col_off,  linestyle = :solid, linewidth = 1.2),
+        LineElement(color = col_edge, linestyle = :solid, linewidth = 1.0),
+    ],
+    ["AMOC-on eq. run", "AMOC-off eq. run", "Edge eq. run"],
+    "Equilibrium run",
+    labelsize = 11,
+)
+
+fig1d_path = plotsdir("plasim_equilibrium_scatter_3d.png")
+wsave(fig1d_path, fig1d)
+@info "Figure 1d saved to: $fig1d_path"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Figure 2: Bar chart — mean convergence times
@@ -416,20 +643,45 @@ wsave(datadir("plasim", "resilience_summaries.jld2"), results_to_save)
 @info "Results saved to: $(datadir("plasim", "resilience_summaries.jld2"))"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Local variability around AMOC-on and AMOC-off equilibria
+# Save key metrics to CSV
 # ─────────────────────────────────────────────────────────────────────────────
 
-@info "Computing local variability for 285 ppm..."
-var_on_285  = compute_local_variability(
-    joinpath(DATA_DIR, "plasimelancholia_$(CO2_LABEL_PREINDUSTRIAL)_on.etc.nc"), VARIABLE_NAMES)
-var_off_285 = compute_local_variability(
-    joinpath(DATA_DIR, "plasimelancholia_$(CO2_LABEL_PREINDUSTRIAL)_of.etc.nc"), VARIABLE_NAMES)
+# Volume of the 1σ ellipsoid in 3D EOF space: V = (4π/3) · √det(C)
+ellipsoid_volume(C::Matrix) = (4π / 3) * sqrt(det(Symmetric(C)))
 
-@info "Computing local variability for 360 ppm..."
-var_on_360  = compute_local_variability(
-    joinpath(DATA_DIR, "plasimelancholia_$(CO2_LABEL_CURRENT)_on.etc.nc"), VARIABLE_NAMES)
-var_off_360 = compute_local_variability(
-    joinpath(DATA_DIR, "plasimelancholia_$(CO2_LABEL_CURRENT)_of.etc.nc"), VARIABLE_NAMES)
+# Mean AMOC strength from an equilibrium NetCDF file
+function mean_amoc_strength(filepath::String)
+    NCDataset(filepath, "r") do ds
+        mean(skipmissing(ds["amoc_strength"][:]))
+    end
+end
+
+amoc_on_285  = mean_amoc_strength(joinpath(DATA_DIR, "plasimelancholia_$(CO2_LABEL_PREINDUSTRIAL)_on.etc.nc"))
+amoc_off_285 = mean_amoc_strength(joinpath(DATA_DIR, "plasimelancholia_$(CO2_LABEL_PREINDUSTRIAL)_of.etc.nc"))
+amoc_on_360  = mean_amoc_strength(joinpath(DATA_DIR, "plasimelancholia_$(CO2_LABEL_CURRENT)_on.etc.nc"))
+amoc_off_360 = mean_amoc_strength(joinpath(DATA_DIR, "plasimelancholia_$(CO2_LABEL_CURRENT)_of.etc.nc"))
+
+metrics_df = DataFrame(
+    co2_ppm            = [285,                        285,                         360,                        360                        ],
+    state              = ["AMOC-on",                  "AMOC-off",                  "AMOC-on",                  "AMOC-off"                 ],
+    mean_conv_time_yr  = [summary_285.mean_conv_time_on,  summary_285.mean_conv_time_off,  summary_360.mean_conv_time_on,  summary_360.mean_conv_time_off ],
+    mean_edge_dist     = [summary_285.mean_dist_on,       summary_285.mean_dist_off,       summary_360.mean_dist_on,       summary_360.mean_dist_off      ],
+    ellipsoid_volume_1sigma = [
+        ellipsoid_volume(var_on_285.covariance),
+        ellipsoid_volume(var_off_285.covariance),
+        ellipsoid_volume(var_on_360.covariance),
+        ellipsoid_volume(var_off_360.covariance),
+    ],
+    mean_amoc_strength_Sv = [amoc_on_285, amoc_off_285, amoc_on_360, amoc_off_360],
+)
+
+csv_path = datadir("plasim", "resilience_metrics.csv")
+CSV.write(csv_path, metrics_df)
+@info "Metrics CSV saved to: $csv_path"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Local variability summary print
+# ─────────────────────────────────────────────────────────────────────────────
 
 # Print summary
 println("\n=== Local Variability around Equilibria ===\n")
@@ -504,6 +756,8 @@ wsave(fig4_path, fig4)
 # Display figures if running interactively
 display(fig1)
 display(fig1b)
+display(fig1c)
+display(fig1d)
 display(fig2)
 display(fig3)
 display(fig4)
