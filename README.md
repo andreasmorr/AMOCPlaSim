@@ -9,4 +9,13 @@ Wood et al. and later Alkhayuon et al. parametrize a 3-box model of the AMOC. Th
 We run many trajectories in the CLIMBER-X model starting from perturbed states away from the stable AMOC on state. These perturbations should be of a particular nature, changing salinity across large coherent parts of the ocean (similar to the boxes from the box-model). This way, we can map out basins of attraction in this more complex model and assess their relative sizes and geometries, in addtion to transient characteristics of the model runs. Locally around the stable AMOC state, we can also assess the linear stability from equilirbium runs. This yields comparable information to that from the box model experiments.
 
 ## PlaSim
-We have high-dimensional trajectories that are reduced to dominant EOFs (physically similar to boxes from above) that go from the saddle (edge) state to either the on or the off state of the AMOC. We have them for a configuration of current CO2 levels and for a heightened CO2 level. We can analyze these time series for their convergence time and the distance of the edge state to the attractor. We also have equilibrium at the stable states runs available, which can again be used to assess local stability.
+We have high-dimensional trajectories that are reduced to dominant EOFs (physically similar to boxes from above) that go from the saddle (edge) state to either the on or the off state of the AMOC. Trajectories are available for pre-industrial (285 ppm) and current (360 ppm) CO2 levels. In addition to the bisection trajectories, we have long equilibrium runs at the AMOC-on, AMOC-off, and edge states for both CO2 levels.
+
+The equilibrium runs are used to fit a Gaussian distribution to each state in EOF space. The resulting covariance ellipsoids (at a chosen nσ level, currently 3σ) define the boundaries of each state and are used for two key metrics:
+
+- **Convergence time**: the transit time from the last step a trajectory is inside the edge-state ellipse to the first step it enters the target attractor ellipse, evaluated in the 2D space of the first two EOFs. Trajectories that never visited the edge ellipse are excluded.
+- **Edge-to-attractor distance**: the gap between the surfaces of the edge-state and attractor ellipsoids (zero if they overlap).
+
+The equilibrium runs are also used to assess local stability via variance, dominant variance, lag-1 autocorrelation, and integrated autocorrelation time per EOF dimension. Mean AMOC strength is read directly from the equilibrium NetCDF files.
+
+All key metrics (mean convergence time, edge distance, 1σ ellipsoid volume, mean AMOC strength) for the AMOC-on and AMOC-off states at both CO2 levels are saved to `data/plasim/resilience_metrics.csv`.
