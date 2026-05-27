@@ -62,7 +62,9 @@ def plot_traj_shaded(ax, x, y, color, alpha_start=0.10, alpha_end=0.85, lw=0.8):
     colors_with_alpha = [(*matplotlib.colors.to_rgb(color), a) for a in alphas]
     lc = LineCollection(segs, colors=colors_with_alpha, linewidth=lw)
     ax.add_collection(lc)
-    ax.autoscale()
+    # LineCollections don't contribute to relim(), so update datalim explicitly
+    ax.update_datalim(np.column_stack([x, y]))
+    ax.autoscale_view()
 
 
 # ---------------------------------------------------------------------------
@@ -109,6 +111,9 @@ def main() -> None:
         data[co2_label] = d
 
     fig, axes_top, axes_bottom = make_paper_figure()
+    for ax in axes_bottom:
+        ax.set_aspect("auto")
+    axes_bottom[1].sharex(axes_bottom[0])
     panel_labels = ["(a)", "(b)", "(c)", "(d)"]
 
     for col, (co2_label, title) in enumerate(SCENARIOS):
@@ -156,6 +161,13 @@ def main() -> None:
                         "AMOC strength not available\nfor this model output",
                         ha="center", va="center", transform=ax_top.transAxes,
                         fontsize=8, color="gray")
+
+        # Reference lines from equilibrium data
+        for state, color in [("on", COL_ON), ("off", COL_OFF)]:
+            sub = df_equil[df_equil["state"] == state]["amoc_strength"]
+            if not sub.empty:
+                ref = float(sub.iloc[-min(100, len(sub)):].mean())
+                ax_top.axhline(ref, color=color, lw=1.0, ls="--", alpha=0.8)
 
         ax_top.set_title(title, fontsize=9)
         if col == 0:
