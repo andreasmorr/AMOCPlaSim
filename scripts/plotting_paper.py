@@ -108,8 +108,7 @@ def main() -> None:
             sys.exit(1)
         data[co2_label] = d
 
-    fig, axes_top, axes_bottom = make_paper_figure(ncols=2, top_height=1.4,
-                                                   bottom_height=3.0)
+    fig, axes_top, axes_bottom = make_paper_figure()
     panel_labels = ["(a)", "(b)", "(c)", "(d)"]
 
     for col, (co2_label, title) in enumerate(SCENARIOS):
@@ -161,22 +160,13 @@ def main() -> None:
         ax_top.set_title(title, fontsize=9)
         if col == 0:
             ax_top.set_ylabel("AMOC strength (Sv)")
-        ax_top.set_xlabel("Time (model steps)")
+        else:
+            ax_top.tick_params(labelleft=False)
+        ax_top.set_xlabel("Time (model years)")
         add_panel_label(ax_top, panel_labels[col])
 
         # ── BOTTOM panel: EOF1 vs EOF2 phase portrait ─────────────────────────
-        # 1. Light thin equilibrium run lines
-        for state_name, color, alpha in [
-            ("on",   COL_ON,  0.30),
-            ("off",  COL_OFF, 0.30),
-            ("edge", COL_EDGE, 0.25),
-        ]:
-            sub = df_equil[df_equil["state"] == state_name].sort_values("time")
-            if not sub.empty:
-                ax_bot.plot(sub["x1"].values, sub["x2"].values,
-                            color=color, lw=0.6, alpha=alpha, zorder=1)
-
-        # 2. Gaussian ellipses (thick dashed)
+        # 1. Gaussian ellipses (thick dashed)
         for state_name, color in [
             ("on",   COL_ON  ),
             ("off",  COL_OFF ),
@@ -187,7 +177,7 @@ def main() -> None:
                 ax_bot.plot(sub["x"].values, sub["y"].values,
                             color=color, lw=1.8, ls="--", alpha=0.85, zorder=2)
 
-        # 3. Mean position stars
+        # 2. Mean position stars
         for _, row in df_means.iterrows():
             color = (COL_ON   if row["state"] == "on"   else
                      COL_OFF  if row["state"] == "off"  else
@@ -196,7 +186,7 @@ def main() -> None:
                            marker="*", s=100, color=color, zorder=5,
                            edgecolors="white", linewidths=0.4)
 
-        # 4. Edge-track trajectories with time shading
+        # 3. Edge-track trajectories with time shading
         on_tids  = df_trajs[df_trajs["label"] == "on"]["traj_id"].unique()
         off_tids = df_trajs[df_trajs["label"] == "off"]["traj_id"].unique()
 
@@ -213,6 +203,8 @@ def main() -> None:
         ax_bot.set_xlabel("EOF 1")
         if col == 0:
             ax_bot.set_ylabel("EOF 2")
+        else:
+            ax_bot.tick_params(labelleft=False)
         add_panel_label(ax_bot, panel_labels[col + 2])
 
     out_path = PLOTS_DIR / "plasim_paper.pdf"

@@ -48,14 +48,38 @@ file_pattern_360(i) = "plasimelancholia_$(CO2_LABEL_CURRENT)_edgetrack_iter$(lpa
 file_pattern_285(i) = "plasimelancholia_$(CO2_LABEL_PREINDUSTRIAL)_edgetrack_itx$(lpad(i-1, 3, '0')).etc.nc"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Helper: try to read AMOC strength from a NetCDF file
+# Helper: try to read AMOC strength for a specific track from a NetCDF file
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Single-track overload for equilibrium files (amoc_strength is 1-D there).
 function try_load_amoc_strength(filepath::String)
     try
         NCDataset(filepath, "r") do ds
             haskey(ds, "amoc_strength") || return nothing
             return Float64.(coalesce.(ds["amoc_strength"][:], NaN))
+        end
+    catch
+        return nothing
+    end
+end
+
+function try_load_amoc_strength(filepath::String, track_id::Int)
+    try
+        NCDataset(filepath, "r") do ds
+            haskey(ds, "amoc_strength") || return nothing
+            # Julia's NCDatasets reverses NetCDF dimension order.
+            # The file stores amoc_strength as (track=2, time=N); Julia reads
+            # it as (N, 2) = (time, track).  Use [:, :] to get the true 2-D
+            # matrix and then slice out the requested track column.
+            raw = ds["amoc_strength"][:, :]  # (n_time, n_track) in Julia
+            n_time, n_track = size(raw)
+            if n_track < n_time
+                # (time, track) layout — standard after dimension reversal
+                return Float64.(coalesce.(raw[:, track_id], NaN))
+            else
+                # (track, time) layout — Julia read it without reversal
+                return Float64.(coalesce.(raw[track_id, :], NaN))
+            end
         end
     catch
         return nothing
@@ -93,30 +117,15 @@ function export_trajectories(
         sub = sort(filter(r -> r.trajectory_id == tid, df), :time)
         state_label = labels[j] == 1 ? "on" : "off"
 
-        # Try to load AMOC strength from the originating NetCDF file
-        # file_id and track_id are stored in the DataFrame
+        # Load the AMOC time series for this specific track from its NetCDF file.
         file_id  = sub[1, :file_id]
         track_id = sub[1, :track_id]
         fname    = joinpath(DATA_DIR, file_pattern(file_id))
-        amoc_raw = try_load_amoc_strength(fname)
+        amoc_raw = try_load_amoc_strength(fname, track_id)  # 1-D Vector or nothing
 
         for t in 1:nrow(sub)
-            # Determine the amoc_strength for this row's time index
-            amoc_val = NaN
-            if amoc_raw !== nothing
-                # amoc_raw may be shaped (n_time,) or (n_tracks, n_time) etc.
-                # Use track_id offset if applicable; guard with try/catch
-                try
-                    if ndims(amoc_raw) == 1
-                        amoc_val = t <= length(amoc_raw) ? amoc_raw[t] : NaN
-                    elseif ndims(amoc_raw) == 2
-                        # Try (track, time) layout
-                        amoc_val = amoc_raw[track_id, t]
-                    end
-                catch
-                    amoc_val = NaN
-                end
-            end
+            amoc_val = (amoc_raw !== nothing && t <= length(amoc_raw)) ?
+                       amoc_raw[t] : NaN
 
             push!(rows, (
                 tid,
