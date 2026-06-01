@@ -44,7 +44,7 @@ For each CO₂ level (285 ppm, 360 ppm) the script:
 4. Computes two primary resilience metrics:
    - **Convergence time**: transit time from last visit inside the edge ellipse to first entry into the target attractor ellipse (in the EOF1–EOF2 plane).
    - **Edge-to-attractor distance**: gap between the surfaces of the edge and attractor ellipsoids (zero if overlapping).
-5. Computes local stability metrics from equilibrium runs: variance, dominant variance, lag-1 autocorrelation, integrated autocorrelation time per EOF, mean AMOC strength, and the **1σ semi-major axis of the Gaussian ellipse** fitted in the (EOF1, EOF2) plane (`ellipse_long_axis_1sigma` = `sqrt(max eigenvalue of C[1:2,1:2])`). This quantity is used as a stand-in for characteristic return time in the synthesis figure.
+5. Computes local stability metrics from equilibrium runs: variance, dominant variance, lag-1 autocorrelation, integrated autocorrelation time per EOF, mean AMOC strength, and the **1σ semi-major axis of the Gaussian ellipse** fitted in the (EOF1, EOF2) plane (`ellipse_long_axis_1sigma` = `2000 × sqrt(max eigenvalue of C[1:2,1:2])`). The factor of 2000 scales the raw EOF-space length to a year-proxy unit comparable to the other models in the synthesis figure. This quantity is used as a stand-in for characteristic return time in the synthesis figure.
 6. Saves all key metrics to `data/plasim/resilience_metrics.csv`.
 
 ### `plasim_export_paper_data.jl`

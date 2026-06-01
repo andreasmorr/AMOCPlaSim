@@ -661,7 +661,7 @@ amoc_off_285 = mean_amoc_strength(joinpath(DATA_DIR, "plasimelancholia_$(CO2_LAB
 amoc_on_360  = mean_amoc_strength(joinpath(DATA_DIR, "plasimelancholia_$(CO2_LABEL_CURRENT)_on.etc.nc"))
 amoc_off_360 = mean_amoc_strength(joinpath(DATA_DIR, "plasimelancholia_$(CO2_LABEL_CURRENT)_of.etc.nc"))
 
-ellipse_long_axis_1sigma(C::Matrix) = sqrt(maximum(eigvals(Symmetric(C[1:2, 1:2]))))
+ellipse_long_axis_1sigma(C::Matrix) = 2000 * sqrt(maximum(eigvals(Symmetric(C[1:2, 1:2]))))
 
 metrics_df = DataFrame(
     co2_ppm            = [285,                        285,                         360,                        360                        ],
