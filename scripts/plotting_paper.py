@@ -7,7 +7,7 @@ Reads CSV files exported by plasim_export_paper_data.jl:
   data/plasim/paper/ellipses_{285ppm,360ppm}.csv
   data/plasim/paper/state_means_{285ppm,360ppm}.csv
 
-Output: plots/plasim_paper.pdf
+Output: plots/plasim_paper.png
 
 Run from the AMOCPlaSim directory or the project root:
     python scripts/plotting_paper.py
@@ -20,8 +20,6 @@ from pathlib import Path
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import matplotlib.colors
-from matplotlib.collections import LineCollection
 import numpy as np
 import pandas as pd
 
@@ -46,25 +44,6 @@ from amoc_plot_style import (
 # Trajectory alpha shading helper
 # ---------------------------------------------------------------------------
 
-def plot_traj_shaded(ax, x, y, color, alpha_start=0.10, alpha_end=0.85, lw=0.8):
-    """Plot trajectory as a LineCollection with alpha increasing with time."""
-    x = np.asarray(x, dtype=float)
-    y = np.asarray(y, dtype=float)
-    # Drop NaNs
-    mask = np.isfinite(x) & np.isfinite(y)
-    x, y = x[mask], y[mask]
-    if len(x) < 2:
-        return
-    points = np.array([x, y]).T.reshape(-1, 1, 2)
-    segs   = np.concatenate([points[:-1], points[1:]], axis=1)
-    n      = len(segs)
-    alphas = np.linspace(alpha_start, alpha_end, n)
-    colors_with_alpha = [(*matplotlib.colors.to_rgb(color), a) for a in alphas]
-    lc = LineCollection(segs, colors=colors_with_alpha, linewidth=lw)
-    ax.add_collection(lc)
-    # LineCollections don't contribute to relim(), so update datalim explicitly
-    ax.update_datalim(np.column_stack([x, y]))
-    ax.autoscale_view()
 
 
 # ---------------------------------------------------------------------------
@@ -204,13 +183,13 @@ def main() -> None:
 
         for tid in on_tids:
             sub = df_trajs[df_trajs["traj_id"] == tid].sort_values("time")
-            plot_traj_shaded(ax_bot, sub["x1"].values, sub["x2"].values,
-                             color=COL_ON, alpha_start=0.08, alpha_end=0.7, lw=0.7)
+            ax_bot.plot(sub["x1"].values, sub["x2"].values,
+                        color=COL_ON, alpha=0.4, lw=0.7)
 
         for tid in off_tids:
             sub = df_trajs[df_trajs["traj_id"] == tid].sort_values("time")
-            plot_traj_shaded(ax_bot, sub["x1"].values, sub["x2"].values,
-                             color=COL_OFF, alpha_start=0.08, alpha_end=0.7, lw=0.7)
+            ax_bot.plot(sub["x1"].values, sub["x2"].values,
+                        color=COL_OFF, alpha=0.4, lw=0.7)
 
         ax_bot.set_xlabel("EOF 1")
         if col == 0:
@@ -219,8 +198,9 @@ def main() -> None:
             ax_bot.tick_params(labelleft=False)
         add_panel_label(ax_bot, panel_labels[col + 2])
 
-    out_path = PLOTS_DIR / "plasim_paper.pdf"
-    savefig_pdf(fig, out_path)
+    out_path = PLOTS_DIR / "plasim_paper.png"
+    fig.savefig(out_path, dpi=200, bbox_inches="tight")
+    print(f"Figure saved: {out_path}")
     plt.close(fig)
 
 
