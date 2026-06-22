@@ -168,14 +168,7 @@ def main() -> None:
                 ax_bot.plot(sub["x"].values, sub["y"].values,
                             color=color, lw=1.8, ls="--", alpha=0.85, zorder=2)
 
-        # 2. Mean position stars
-        for _, row in df_means.iterrows():
-            color = (COL_ON   if row["state"] == "on"   else
-                     COL_OFF  if row["state"] == "off"  else
-                     COL_EDGE)
-            ax_bot.scatter([row["x1"]], [row["x2"]],
-                           marker="*", s=100, color=color, zorder=5,
-                           edgecolors="white", linewidths=0.4)
+        # 2. Mean position markers removed
 
         # 3. Edge-track trajectories with time shading
         on_tids  = df_trajs[df_trajs["label"] == "on"]["traj_id"].unique()
