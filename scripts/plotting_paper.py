@@ -186,6 +186,11 @@ def main() -> None:
             ax_bot.tick_params(labelleft=False)
         add_panel_label(ax_bot, panel_labels[col + 2])
 
+    x_lo = min(ax.get_xlim()[0] for ax in axes_top)
+    x_hi = max(ax.get_xlim()[1] for ax in axes_top)
+    for ax in axes_top:
+        ax.set_xlim(x_lo, x_hi)
+
     out_path = PLOTS_DIR / "plasim_paper.png"
     fig.savefig(out_path, dpi=200, bbox_inches="tight")
     print(f"Figure saved: {out_path}")
