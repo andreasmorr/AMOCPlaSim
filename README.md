@@ -26,7 +26,7 @@ AMOCPlaSim/
 │           ├── ellipses_{285,360}ppm.csv      # Gaussian ellipse boundary coordinates
 │           └── state_means_{285,360}ppm.csv   # Mean EOF positions for each state
 ├── plots/
-│   └── plasim_paper.pdf               # Output paper figure
+│   └── plasim_paper.png               # Output paper figure (200 dpi PNG)
 ├── Project.toml
 └── Manifest.toml
 ```
@@ -62,10 +62,10 @@ Utility functions for loading and pre-processing PlaSim NetCDF files, projecting
 `plotting_paper.py` produces a publication-quality 4-panel figure using the shared design language from `../amoc_plot_style.py`.
 
 **Figure layout:**
-- **Top row** (shorter): AMOC strength vs time for all converged trajectories at 285 ppm (left) and 360 ppm (right).
-- **Bottom row** (square): 2D EOF phase portrait. Background shows faint equilibrium run lines for on/off/edge states. Gaussian covariance ellipsoids are overlaid and annotated. Trajectories are time-shaded (alpha increases with time). Attractor mean positions marked with stars.
+- **Top row** (shorter): AMOC strength vs time for all converged on-state and off-state edge-track trajectories at 285 ppm (left) and 360 ppm (right). AMOC-on and AMOC-off equilibria shown as dashed horizontal lines. If the `amoc_strength` column is absent from the trajectory CSV, a placeholder message is shown.
+- **Bottom row** (square): 2D EOF phase portrait. Gaussian covariance ellipsoids (thick dashed lines) outline each state (on, off, edge). Converged trajectories are plotted at fixed opacity.
 
-Output: `plots/plasim_paper.pdf`
+Output: `plots/plasim_paper.png`
 
 ---
 
