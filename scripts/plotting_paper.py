@@ -37,6 +37,7 @@ sys.path.insert(0, str(UMBRELLA))
 from amoc_plot_style import (
     COL_ON, COL_OFF, COL_EDGE,
     TRAJ_COLORS,
+    LW_ATTRACTOR, ALPHA_ATTRACTOR, LW_EQUIL, LS_EQUIL, ALPHA_EQUIL,
     make_paper_figure, add_panel_label, savefig_pdf,
 )
 
@@ -141,7 +142,7 @@ def main() -> None:
             sub = df_equil[df_equil["state"] == state]["amoc_strength"]
             if not sub.empty:
                 ref = float(sub.iloc[-min(100, len(sub)):].mean())
-                ax_top.axhline(ref, color=color, lw=1.0, ls="--", alpha=0.8)
+                ax_top.axhline(ref, color=color, lw=LW_EQUIL, ls=LS_EQUIL, alpha=ALPHA_EQUIL)
 
         ax_top.set_title(title, fontsize=9)
         if col == 0:
@@ -161,7 +162,7 @@ def main() -> None:
             sub = df_ellip[df_ellip["state"] == state_name]
             if not sub.empty:
                 ax_bot.plot(sub["x"].values, sub["y"].values,
-                            color=color, lw=1.8, ls="--", alpha=0.85, zorder=2)
+                            color=color, lw=LW_ATTRACTOR, ls="--", alpha=ALPHA_ATTRACTOR, zorder=2)
 
         # 2. Mean position markers removed
 
