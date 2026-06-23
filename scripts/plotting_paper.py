@@ -129,11 +129,6 @@ def main() -> None:
                 ax_top.plot(sub["time"].values, amoc_arr,
                             color=COL_OFF, lw=0.7, alpha=0.5)
 
-            # Proxy legend entries
-            ax_top.plot([], [], color=COL_ON,  lw=1.2, label="AMOC-on")
-            ax_top.plot([], [], color=COL_OFF, lw=1.2, label="AMOC-off")
-            if col == 0:
-                ax_top.legend(loc="upper right", framealpha=0.8, fontsize=7)
         else:
             # No AMOC strength variable available
             ax_top.text(0.5, 0.5,
