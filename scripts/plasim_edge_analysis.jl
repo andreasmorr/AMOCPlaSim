@@ -663,6 +663,10 @@ amoc_off_360 = mean_amoc_strength(joinpath(DATA_DIR, "plasimelancholia_$(CO2_LAB
 
 ellipse_long_axis_1sigma(C::Matrix) = 2000 * sqrt(maximum(eigvals(Symmetric(C[1:2, 1:2]))))
 
+# local_resilience = 1 / (π × √det(C[1:2,1:2])):
+# area of the 1σ Gaussian ellipse in (EOF1, EOF2) space = π × a × b = π × √(λ₁ × λ₂) = π × √det(C₁₂)
+local_resilience_ellipse(C::Matrix) = 1.0 / (π * sqrt(det(Symmetric(C[1:2, 1:2]))))
+
 metrics_df = DataFrame(
     co2_ppm            = [285,                        285,                         360,                        360                        ],
     state              = ["AMOC-on",                  "AMOC-off",                  "AMOC-on",                  "AMOC-off"                 ],
@@ -679,6 +683,12 @@ metrics_df = DataFrame(
         ellipse_long_axis_1sigma(var_off_285.covariance),
         ellipse_long_axis_1sigma(var_on_360.covariance),
         ellipse_long_axis_1sigma(var_off_360.covariance),
+    ],
+    local_resilience = [
+        local_resilience_ellipse(var_on_285.covariance),
+        local_resilience_ellipse(var_off_285.covariance),
+        local_resilience_ellipse(var_on_360.covariance),
+        local_resilience_ellipse(var_off_360.covariance),
     ],
     mean_amoc_strength_Sv = [amoc_on_285, amoc_off_285, amoc_on_360, amoc_off_360],
 )
