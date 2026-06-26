@@ -44,7 +44,7 @@ For each CO₂ level (285 ppm, 360 ppm) the script:
 4. Computes two primary resilience metrics:
    - **Convergence time**: transit time from last visit inside the edge ellipse to first entry into the target attractor ellipse (in the EOF1–EOF2 plane).
    - **Edge-to-attractor distance**: gap between the surfaces of the edge and attractor ellipsoids (zero if overlapping).
-5. Computes local stability metrics from equilibrium runs: variance, dominant variance, lag-1 autocorrelation, integrated autocorrelation time per EOF, mean AMOC strength, and **local resilience** as the inverse area of the 1σ Gaussian ellipse in the (EOF1, EOF2) plane: `local_resilience = 1 / (π × sqrt(det(C[1:2,1:2])))`, where the two eigenvalues of C[1:2,1:2] are the squared semi-axis lengths. A smaller (tighter) attractor ellipse implies higher local resilience. This quantity is the stand-in for local resilience in the synthesis figure (replacing the former `ellipse_long_axis_1sigma`).
+5. Computes local stability metrics from equilibrium runs: variance, dominant variance, lag-1 autocorrelation, integrated autocorrelation time per EOF, mean AMOC strength, and **local resilience** as the inverse of the long axis of the 1σ Gaussian ellipse in the (EOF1, EOF2) plane: `local_resilience = 1 / ellipse_long_axis_1sigma = 1 / (2000 × sqrt(λ_max(C[1:2,1:2])))`, where `λ_max` is the largest eigenvalue of the 2×2 marginal covariance. A smaller (less elongated) attractor ellipse implies higher local resilience. This quantity is the stand-in for local resilience in the synthesis figure.
 6. Saves all key metrics to `data/plasim/resilience_metrics.csv`.
 
 ### `plasim_export_paper_data.jl`
