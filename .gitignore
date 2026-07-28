@@ -79,3 +79,9 @@ data/plasim/plasimelancholia_360ppm_edgetrack_iter036.etc.nc
 data/plasim/plasimelancholia_360ppm_edgetrack_iter037.etc.nc
 data/plasim/plasimelancholia_360ppm_of.etc.nc
 data/plasim/plasimelancholia_360ppm_on.etc.nc
+
+# Generated box-mean salinity NetCDF outputs (compute_box_salinity.py)
+data/plasim_boxsalt/*.nc
+
+# Python bytecode
+__pycache__/

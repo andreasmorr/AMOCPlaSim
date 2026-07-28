@@ -13,18 +13,23 @@ AMOCPlaSim/
 ├── scripts/
 │   ├── plasim_edge_analysis.jl        # Main analysis script
 │   ├── plasim_export_paper_data.jl    # Export CSVs for paper figures
-│   └── plotting_paper.py              # Paper figure (reads exported CSVs)
+│   ├── plotting_paper.py              # Paper figure (reads exported CSVs)
+│   ├── compute_box_salinity.py        # Box-mean salinity time series (Wood/CLIMBER-X boxes)
+│   └── regions.py                     # Börner's PlaRegion basin masks (vendored)
 ├── src/
 │   └── plasim_utils.jl                # NetCDF loading, EOF projection, ellipsoid fitting
 ├── data/
-│   └── plasim/
-│       ├── resilience_metrics.csv     # Key metrics for all states and CO₂ levels
-│       ├── resilience_summaries.jld2  # Full cached results
-│       └── paper/                     # CSV exports for plotting
-│           ├── trajectories_{285,360}ppm.csv  # Filtered converged trajectory time series
-│           ├── equilibria_{285,360}ppm.csv    # Equilibrium run time series (on/off/edge)
-│           ├── ellipses_{285,360}ppm.csv      # Gaussian ellipse boundary coordinates
-│           └── state_means_{285,360}ppm.csv   # Mean EOF positions for each state
+│   ├── plasim/
+│   │   ├── resilience_metrics.csv     # Key metrics for all states and CO₂ levels
+│   │   ├── resilience_summaries.jld2  # Full cached results
+│   │   └── paper/                     # CSV exports for plotting
+│   │       ├── trajectories_{285,360}ppm.csv  # Filtered converged trajectory time series
+│   │       ├── equilibria_{285,360}ppm.csv    # Equilibrium run time series (on/off/edge)
+│   │       ├── ellipses_{285,360}ppm.csv      # Gaussian ellipse boundary coordinates
+│   │       └── state_means_{285,360}ppm.csv   # Mean EOF positions for each state
+│   └── plasim_boxsalt/               # Box-mean salinity files (compute_box_salinity.py output)
+│       ├── plasimelancholia_{285ppm,360ppm}_edgetrack_{itx,iter}NNN.etc.nc  # Edge tracks (track dim)
+│       └── plasimelancholia_{285ppm,360ppm}_{on,of,ed}.etc.nc               # Equilibria
 ├── plots/
 │   └── plasim_paper.png               # Output paper figure (200 dpi PNG)
 ├── Project.toml
@@ -54,6 +59,36 @@ Exports all data required by `plotting_paper.py` to `data/plasim/paper/`. For ea
 ### `src/plasim_utils.jl`
 
 Utility functions for loading and pre-processing PlaSim NetCDF files, projecting fields onto EOFs, and fitting and evaluating Gaussian ellipsoids.
+
+### `compute_box_salinity.py`
+
+Builds an alternative, box-based state-space reduction from the raw PlaSim-LSG salinity fields (Börner et al. 2025), replacing the three EOF-reduced coordinates (`redu1/2/3`) with three **box-mean salinity** time series. The boxes are the Wood/CLIMBER-X perturbation regions re-created on the PlaSim grid (see `../plotting_perturbations.py`), each averaged over the top 100 m (top 2 depth levels), with no tapering:
+
+| variable | box | latitude band |
+|----------|-----|---------------|
+| `salt_na`    | North Atlantic | 35°N – 80°N |
+| `salt_trop`  | Tropical       | 35°S – 35°N |
+| `salt_south` | Southern       | 90°S – 35°S |
+
+Each box mean is a volume-weighted average over its (lat × depth) cells, weighting by `cos(lat) × layer_thickness` and skipping land cells (NaN).
+
+**Inputs** (external, on the data drive — see the constants at the top of the script):
+- Edge tracks: `<co2>/{lower,upper}/plasimedge_<co2>_edgetrack_itxNNN_<branch>.s_zonav.nc` — already zonally-averaged salinity `s(time, depth, lat)`. For each index the `lower` (→ AMOC-off) and `upper` (→ AMOC-on) branches are combined into one output file with a `track = ['upper', 'lower']` dimension; unequal track lengths are padded with NaN.
+- Equilibria: `<co2>/plasimedge_<co2>_{on,of,ed}.tsv.nc` — full 3D salinity `s(time, depth, lat, lon)`. These are first reduced to the Atlantic zonal mean using Börner's `PlaRegion` mask (`Atlantic3D`, southern border −34°, i.e. `s.where(Atlantic3D()).mean(dim='lon')`), then averaged into the same boxes. Written as single-trajectory `(time,)` files. `PlaRegion` lives in the vendored `scripts/regions.py` and reads its grid files (`wet.nc`, `basins_scalar.nc`, `basins_vector.nc`) from the `GRID_DIR` path set at the top of the script.
+
+**Output** → `data/plasim_boxsalt/`, formatted to match the example `.etc.nc` files in `data/plasim/` so the existing loaders in `src/plasim_utils.jl` can read them directly. Edge-track files are re-indexed contiguously with the existing `itx` (285 ppm) / `iter` (360 ppm) naming; global/variable attributes record the source file and box geometry.
+
+> **Note:** the source is an **Atlantic-only** zonal mean (≈ 35°S – 80°N), so the global Southern Ocean box has no data and `salt_south` is all-NaN in every file — effectively a two-box (NA, Trop) reduction with an explicit no-coverage marker for the third box.
+
+To run the existing Julia analysis on these files, point `DATA_DIR` at `data/plasim_boxsalt`, set `VARIABLE_NAMES = ["salt_na", "salt_trop", "salt_south"]` in `plasim_edge_analysis.jl`, and note that the AMOC-on branch is now the *saltier* NA box (so the on/off split may need its sign flipped).
+
+Run it with:
+
+```bash
+python scripts/compute_box_salinity.py                 # edge tracks + equilibria
+python scripts/compute_box_salinity.py --skip-equilibria   # edge-track files only
+python scripts/compute_box_salinity.py --skip-edgetrack    # equilibrium files only
+```
 
 ---
 
@@ -90,7 +125,7 @@ Results are cached in `data/plasim/` and figures are written to `plots/`.
 
 ## Dependencies
 
-Julia with [DrWatson](https://juliadynamics.github.io/DrWatson.jl/stable/), [NCDatasets.jl](https://alexander-barth.github.io/NCDatasets.jl/stable/), [DataFrames.jl](https://dataframes.juliadata.org/stable/), and [CairoMakie](https://makie.org/). Python requires `numpy` and `matplotlib`. Install Julia packages with:
+Julia with [DrWatson](https://juliadynamics.github.io/DrWatson.jl/stable/), [NCDatasets.jl](https://alexander-barth.github.io/NCDatasets.jl/stable/), [DataFrames.jl](https://dataframes.juliadata.org/stable/), and [CairoMakie](https://makie.org/). Python requires `numpy` and `matplotlib` (plus `xarray` + `netCDF4` for `compute_box_salinity.py`; its Atlantic mask uses the vendored `scripts/regions.py`, which needs the grid files at `GRID_DIR`). Install Julia packages with:
 
 ```julia
 using Pkg; Pkg.instantiate()
