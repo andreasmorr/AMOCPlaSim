@@ -30,8 +30,32 @@ import pandas as pd
 SCRIPT_DIR = Path(__file__).resolve().parent          # AMOCPlaSim/scripts/
 PLASIM_DIR = SCRIPT_DIR.parent                        # AMOCPlaSim/
 UMBRELLA   = PLASIM_DIR.parent                        # AMOCResilience/
-DATA_DIR   = PLASIM_DIR / "data" / "plasim" / "paper"
 PLOTS_DIR  = PLASIM_DIR / "plots"
+
+# ---------------------------------------------------------------------------
+# Dataset selection (must match plasim_export_paper_data.jl)
+#   "eof"     — EOF-reduced coordinates (redu1/2/3); CSVs in data/plasim/paper
+#   "boxsalt" — box-mean salinities (salt_na, salt_trop); CSVs in
+#               data/plasim/paper_boxsalt (see scripts/compute_box_salinity.py)
+# ---------------------------------------------------------------------------
+MODE = "boxsalt"
+
+DATASET_CONFIGS = {
+    "eof": dict(
+        paper_subdir="paper",
+        axis_labels=("EOF 1", "EOF 2"),
+        out_suffix="",
+    ),
+    "boxsalt": dict(
+        paper_subdir="paper_boxsalt",
+        axis_labels=("N. Atlantic salinity (g/kg)", "Tropical salinity (g/kg)"),
+        out_suffix="_boxsalt",
+    ),
+}
+CFG        = DATASET_CONFIGS[MODE]
+AXIS_X, AXIS_Y = CFG["axis_labels"]
+OUT_SUFFIX = CFG["out_suffix"]
+DATA_DIR   = PLASIM_DIR / "data" / "plasim" / CFG["paper_subdir"]
 
 sys.path.insert(0, str(UMBRELLA))
 from amoc_plot_style import (
@@ -107,7 +131,10 @@ def main() -> None:
         ax_bot = axes_bottom[col]
 
         # ── TOP panel: AMOC strength vs time ─────────────────────────────────
-        has_amoc = "amoc_strength" in df_trajs.columns
+        # Treat an all-NaN column (e.g. the box-salinity files, which carry no
+        # AMOC strength) as "not available" so the placeholder message shows.
+        has_amoc = ("amoc_strength" in df_trajs.columns
+                    and not df_trajs["amoc_strength"].isna().all())
 
         if has_amoc:
             # Separate on/off trajectories
@@ -137,9 +164,13 @@ def main() -> None:
                         ha="center", va="center", transform=ax_top.transAxes,
                         fontsize=8, color="gray")
 
-        # Reference lines from equilibrium data
+        # Reference lines from equilibrium data: the settled equilibrium AMOC
+        # strength (mean of the last valid steps).  Drop NaNs first — the box
+        # equilibrium runs can be longer than the EOF files the AMOC is read
+        # from (e.g. 360 ppm: 2000 vs 1800 steps), leaving a trailing NaN tail
+        # that would otherwise make the last-100 mean NaN and hide the line.
         for state, color in [("on", COL_ON), ("off", COL_OFF)]:
-            sub = df_equil[df_equil["state"] == state]["amoc_strength"]
+            sub = df_equil[df_equil["state"] == state]["amoc_strength"].dropna()
             if not sub.empty:
                 ref = float(sub.iloc[-min(100, len(sub)):].mean())
                 ax_top.axhline(ref, color=color, lw=LW_EQUIL, ls=LS_EQUIL, alpha=ALPHA_EQUIL)
@@ -180,9 +211,9 @@ def main() -> None:
             ax_bot.plot(sub["x1"].values, sub["x2"].values,
                         color=COL_OFF, alpha=0.4, lw=0.7)
 
-        ax_bot.set_xlabel("EOF 1")
+        ax_bot.set_xlabel(AXIS_X)
         if col == 0:
-            ax_bot.set_ylabel("EOF 2")
+            ax_bot.set_ylabel(AXIS_Y)
         else:
             ax_bot.tick_params(labelleft=False)
         add_panel_label(ax_bot, panel_labels[col + 2])
@@ -192,7 +223,7 @@ def main() -> None:
     for ax in axes_top:
         ax.set_xlim(x_lo, x_hi)
 
-    out_path = PLOTS_DIR / "plasim_paper.png"
+    out_path = PLOTS_DIR / f"plasim_paper{OUT_SUFFIX}.png"
     fig.savefig(out_path, dpi=200, bbox_inches="tight")
     print(f"Figure saved: {out_path}")
     plt.close(fig)

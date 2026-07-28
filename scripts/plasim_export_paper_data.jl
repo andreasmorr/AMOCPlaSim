@@ -28,12 +28,39 @@ using CSV
 # Configuration (mirrors plasim_edge_analysis.jl exactly)
 # ─────────────────────────────────────────────────────────────────────────────
 
-const DATA_DIR                = datadir("plasim")
+# ── Dataset selection (must match plasim_edge_analysis.jl) ────────────────────
+#   :eof     — EOF-reduced coordinates (redu1/2/3) in data/plasim → paper/
+#   :boxsalt — box-mean salinities (salt_na, salt_trop) in data/plasim_boxsalt
+#              → paper_boxsalt/  (see scripts/compute_box_salinity.py)
+const MODE = :boxsalt
+
+const DATASET_CONFIGS = Dict(
+    :eof => (
+        data_dir     = datadir("plasim"),
+        variables    = ["redu1", "redu2", "redu3"],
+        on_is_low    = true,
+        paper_subdir = "paper",
+    ),
+    :boxsalt => (
+        data_dir     = datadir("plasim_boxsalt"),
+        variables    = ["salt_na", "salt_trop"],
+        on_is_low    = false,
+        paper_subdir = "paper_boxsalt",
+    ),
+)
+const CFG = DATASET_CONFIGS[MODE]
+
+const DATA_DIR                = CFG.data_dir
+const PAPER_DIR               = datadir("plasim", CFG.paper_subdir)
+const ON_IS_LOW               = CFG.on_is_low
+# AMOC strength is read from the EOF dataset directory (the box-salinity files
+# carry no `amoc_strength`); filenames match across both datasets.
+const AMOC_DIR                = DATASET_CONFIGS[:eof].data_dir
 const CO2_LABEL_CURRENT       = "360ppm"
 const CO2_LABEL_PREINDUSTRIAL = "285ppm"
 const N_FILES_360             = 38
 const N_FILES_285             = 37
-const VARIABLE_NAMES          = ["redu1", "redu2", "redu3"]
+const VARIABLE_NAMES          = CFG.variables
 const N_DIMS                  = length(VARIABLE_NAMES)
 const EPSILON_ON              = 0.1
 const EPSILON_OFF             = 0.2
@@ -120,7 +147,7 @@ function export_trajectories(
         # Load the AMOC time series for this specific track from its NetCDF file.
         file_id  = sub[1, :file_id]
         track_id = sub[1, :track_id]
-        fname    = joinpath(DATA_DIR, file_pattern(file_id))
+        fname    = joinpath(AMOC_DIR, file_pattern(file_id))
         amoc_raw = try_load_amoc_strength(fname, track_id)  # 1-D Vector or nothing
 
         for t in 1:nrow(sub)
@@ -138,7 +165,7 @@ function export_trajectories(
         end
     end
 
-    out_path = datadir("plasim", "paper", "trajectories_$(co2_label).csv")
+    out_path = joinpath(PAPER_DIR, "trajectories_$(co2_label).csv")
     CSV.write(out_path, rows)
     @info "  Trajectories saved: $out_path  ($(nrow(rows)) rows)"
 end
@@ -155,11 +182,11 @@ function export_equilibria(
 )
     # Try loading AMOC strength from the equilibrium NetCDF files
     amoc_on_arr  = try_load_amoc_strength(
-        joinpath(DATA_DIR, "plasimelancholia_$(co2_label)_on.etc.nc"))
+        joinpath(AMOC_DIR, "plasimelancholia_$(co2_label)_on.etc.nc"))
     amoc_off_arr = try_load_amoc_strength(
-        joinpath(DATA_DIR, "plasimelancholia_$(co2_label)_of.etc.nc"))
+        joinpath(AMOC_DIR, "plasimelancholia_$(co2_label)_of.etc.nc"))
     amoc_ed_arr  = try_load_amoc_strength(
-        joinpath(DATA_DIR, "plasimelancholia_$(co2_label)_ed.etc.nc"))
+        joinpath(AMOC_DIR, "plasimelancholia_$(co2_label)_ed.etc.nc"))
 
     rows = DataFrame(
         state         = String[],
@@ -183,7 +210,7 @@ function export_equilibria(
         end
     end
 
-    out_path = datadir("plasim", "paper", "equilibria_$(co2_label).csv")
+    out_path = joinpath(PAPER_DIR, "equilibria_$(co2_label).csv")
     CSV.write(out_path, rows)
     @info "  Equilibria saved: $out_path  ($(nrow(rows)) rows)"
 end
@@ -220,7 +247,7 @@ function export_ellipses(
         end
     end
 
-    ell_path = datadir("plasim", "paper", "ellipses_$(co2_label).csv")
+    ell_path = joinpath(PAPER_DIR, "ellipses_$(co2_label).csv")
     CSV.write(ell_path, ellipse_rows)
     @info "  Ellipses saved: $ell_path"
 end
@@ -247,7 +274,7 @@ function export_state_means(
         x2    = [mu_on[2], mu_off[2],  mu_ed[2] ],
     )
 
-    means_path = datadir("plasim", "paper", "state_means_$(co2_label).csv")
+    means_path = joinpath(PAPER_DIR, "state_means_$(co2_label).csv")
     CSV.write(means_path, means_df)
     @info "  State means saved: $means_path"
 end
@@ -257,7 +284,7 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 
 function main()
-    mkpath(datadir("plasim", "paper"))
+    mkpath(PAPER_DIR)
 
     # ── Load trajectories ─────────────────────────────────────────────────────
     @info "Loading 285 ppm trajectories..."
@@ -323,6 +350,13 @@ function main()
         joinpath(DATA_DIR, "plasimelancholia_$(CO2_LABEL_CURRENT)_ed.etc.nc"),
         VARIABLE_NAMES)
 
+    # Equalise edge-run lengths across CO2 levels (truncate the longer to the
+    # shorter) so the exported edge ellipse and edge covariance are comparable.
+    n_ed_common = min(size(ts_ed_285, 1), size(ts_ed_360, 1))
+    ts_ed_285 = ts_ed_285[1:n_ed_common, :]
+    ts_ed_360 = ts_ed_360[1:n_ed_common, :]
+    @info "Edge equilibrium runs truncated to common length: $n_ed_common steps"
+
     # ── Local variability ─────────────────────────────────────────────────────
     @info "Computing local variability for 285 ppm..."
     var_on_285  = compute_local_variability(
@@ -333,7 +367,7 @@ function main()
         VARIABLE_NAMES)
     var_ed_285  = compute_local_variability(
         joinpath(DATA_DIR, "plasimelancholia_$(CO2_LABEL_PREINDUSTRIAL)_ed.etc.nc"),
-        VARIABLE_NAMES)
+        VARIABLE_NAMES; max_samples = n_ed_common)
 
     @info "Computing local variability for 360 ppm..."
     var_on_360  = compute_local_variability(
@@ -344,7 +378,7 @@ function main()
         VARIABLE_NAMES)
     var_ed_360  = compute_local_variability(
         joinpath(DATA_DIR, "plasimelancholia_$(CO2_LABEL_CURRENT)_ed.etc.nc"),
-        VARIABLE_NAMES)
+        VARIABLE_NAMES; max_samples = n_ed_common)
 
     # ── Resilience summaries ──────────────────────────────────────────────────
     @info "Computing resilience summary for 285 ppm..."
@@ -359,6 +393,7 @@ function main()
         edge_cov       = var_ed_285.covariance,
         sigma          = ELLIPSE_SIGMA,
         check_dims     = 2,
+        on_is_low      = ON_IS_LOW,
     )
 
     @info "Computing resilience summary for 360 ppm..."
@@ -373,6 +408,7 @@ function main()
         edge_cov       = var_ed_360.covariance,
         sigma          = ELLIPSE_SIGMA,
         check_dims     = 2,
+        on_is_low      = ON_IS_LOW,
     )
 
     # ── Export CSVs ───────────────────────────────────────────────────────────
@@ -390,7 +426,7 @@ function main()
     export_ellipses(ts_on_360, ts_off_360, ts_ed_360, CO2_LABEL_CURRENT)
     export_state_means(ts_on_360, ts_off_360, ts_ed_360, CO2_LABEL_CURRENT)
 
-    @info "All PlaSim paper data exported to $(datadir("plasim", "paper"))"
+    @info "All PlaSim paper data exported to $(PAPER_DIR)"
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__

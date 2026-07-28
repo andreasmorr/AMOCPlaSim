@@ -256,24 +256,31 @@ end
     classify_trajectories(df, n_dims; final_fraction=0.1) → Vector{Int}
 
 Classify each trajectory as ending at the AMOC-on (label=1) or AMOC-off
-(label=2) attractor, based on the first EOF component (x1 = redu1).
+(label=2) attractor, based on the first reduced coordinate (x1).
 
-The AMOC-on state has a lower value of redu1, and the AMOC-off state has a
-higher value. We split by the median of final redu1 values.
+By default (`on_is_low = true`) the AMOC-on state has the *lower* value of x1,
+as for the EOF coordinate `redu1` (meridional salinity gradient).  For the
+box-mean reduction the first coordinate is the North Atlantic box salinity,
+which is *higher* for AMOC-on; pass `on_is_low = false` in that case.  We split
+by the median of final x1 values.
 
 Returns a vector of length `n_trajectories` with values 1 (AMOC-on) or 2
 (AMOC-off), in the same order as `sort(unique(df.trajectory_id))`.
 """
 function classify_trajectories(df::DataFrame, n_dims::Int;
-                                final_fraction::Float64 = 0.1)
+                                final_fraction::Float64 = 0.1,
+                                on_is_low::Bool = true)
     ids, final_states = _get_final_states(df, n_dims; final_fraction)
 
-    # Use first EOF (redu1) to separate AMOC-on from AMOC-off
-    # Convention: lower redu1 = AMOC-on
-    redu1_vals = final_states[:, 1]
-    threshold  = median(redu1_vals)
+    # Use the first reduced coordinate (x1) to separate AMOC-on from AMOC-off.
+    x1_vals   = final_states[:, 1]
+    threshold = median(x1_vals)
 
-    labels = [v < threshold ? 1 : 2 for v in redu1_vals]
+    if on_is_low
+        labels = [v < threshold ? 1 : 2 for v in x1_vals]   # lower x1 = AMOC-on
+    else
+        labels = [v > threshold ? 1 : 2 for v in x1_vals]   # higher x1 = AMOC-on
+    end
     return labels
 end
 
@@ -294,9 +301,10 @@ Returns a Dict:
 - `2 => mean_state_off`  (AMOC-off attractor, length n_dims)
 """
 function estimate_attractors(df::DataFrame, n_dims::Int;
-                              final_fraction::Float64 = 0.1)
+                              final_fraction::Float64 = 0.1,
+                              on_is_low::Bool = true)
     ids, final_states = _get_final_states(df, n_dims; final_fraction)
-    labels = classify_trajectories(df, n_dims; final_fraction)
+    labels = classify_trajectories(df, n_dims; final_fraction, on_is_low)
 
     on_idx  = findall(==(1), labels)
     off_idx = findall(==(2), labels)
@@ -350,11 +358,12 @@ function compute_convergence_times(df::DataFrame, n_dims::Int,
                                     edge_state::Union{Nothing, Vector{Float64}} = nothing,
                                     edge_cov::Union{Nothing, Matrix{Float64}}  = nothing,
                                     sigma::Real = 1,
-                                    check_dims::Int = 2)
+                                    check_dims::Int = 2,
+                                    on_is_low::Bool = true)
     use_ellipses = (cov_on !== nothing && cov_off !== nothing &&
                     edge_state !== nothing && edge_cov !== nothing)
 
-    labels = classify_trajectories(df, n_dims)
+    labels = classify_trajectories(df, n_dims; on_is_low)
     ids    = sort(unique(df.trajectory_id))
     result = Dict{Int, Float64}()
 
@@ -439,12 +448,13 @@ function compute_edge_to_attractor_distances(df::DataFrame, n_dims::Int,
                                               cov_off::Union{Nothing, Matrix{Float64}}   = nothing,
                                               edge_cov::Union{Nothing, Matrix{Float64}}  = nothing,
                                               sigma::Real = 1,
-                                              check_dims::Int = 2)
+                                              check_dims::Int = 2,
+                                              on_is_low::Bool = true)
     use_ellipses = (cov_on !== nothing && cov_off !== nothing &&
                     edge_state !== nothing && edge_cov !== nothing)
 
     d      = check_dims
-    labels = classify_trajectories(df, n_dims)
+    labels = classify_trajectories(df, n_dims; on_is_low)
     ids    = sort(unique(df.trajectory_id))
     result = Dict{Int, Float64}()
 
@@ -523,14 +533,15 @@ function plasim_resilience_summary(df::DataFrame, n_dims::Int;
                                     cov_off::Union{Nothing, Matrix{Float64}}   = nothing,
                                     edge_cov::Union{Nothing, Matrix{Float64}}  = nothing,
                                     sigma::Real = 1,
-                                    check_dims::Int = 2)
+                                    check_dims::Int = 2,
+                                    on_is_low::Bool = true)
     ids    = sort(unique(df.trajectory_id))
-    labels = classify_trajectories(df, n_dims; final_fraction)
-    attrs  = attractors !== nothing ? attractors : estimate_attractors(df, n_dims; final_fraction)
+    labels = classify_trajectories(df, n_dims; final_fraction, on_is_low)
+    attrs  = attractors !== nothing ? attractors : estimate_attractors(df, n_dims; final_fraction, on_is_low)
     conv_t = compute_convergence_times(df, n_dims, attrs;
-                 ε_on, ε_off, cov_on, cov_off, edge_state, edge_cov, sigma, check_dims)
+                 ε_on, ε_off, cov_on, cov_off, edge_state, edge_cov, sigma, check_dims, on_is_low)
     edist  = compute_edge_to_attractor_distances(df, n_dims, attrs;
-                 edge_state, cov_on, cov_off, edge_cov, sigma, check_dims)
+                 edge_state, cov_on, cov_off, edge_cov, sigma, check_dims, on_is_low)
 
     on_idx  = findall(==(1), labels)
     off_idx = findall(==(2), labels)
@@ -583,13 +594,20 @@ end
 Load a converged-state NetCDF file and return the full time series as a
 matrix of shape `(n_time × n_dims)`.  NaN rows (NetCDF fill values) are
 kept so that the caller can decide how to handle them.
+
+`max_samples` truncates the series to its first `max_samples` time steps
+(used to equalise run lengths across CO2 levels); `nothing` keeps all steps.
 """
-function load_plasim_state_timeseries(filepath::String, variable_names::Vector{String})
+function load_plasim_state_timeseries(filepath::String, variable_names::Vector{String};
+                                      max_samples::Union{Nothing, Int} = nothing)
     NCDataset(filepath, "r") do ds
         n_time = length(ds["time"])
         mat = Matrix{Float64}(undef, n_time, length(variable_names))
         for (k, vname) in enumerate(variable_names)
             mat[:, k] = Float64.(coalesce.(ds[vname][:], NaN))
+        end
+        if max_samples !== nothing && max_samples < n_time
+            mat = mat[1:max_samples, :]
         end
         return mat
     end
@@ -638,8 +656,9 @@ second-order statistics.
 - `mean_ac_time::Float64`               — mean integrated autocorrelation time (yr)
 - `n_samples::Int`                      — number of valid (non-NaN) time steps used
 """
-function compute_local_variability(filepath::String, variable_names::Vector{String})
-    ts_raw = load_plasim_state_timeseries(filepath, variable_names)
+function compute_local_variability(filepath::String, variable_names::Vector{String};
+                                   max_samples::Union{Nothing, Int} = nothing)
+    ts_raw = load_plasim_state_timeseries(filepath, variable_names; max_samples)
 
     # Drop rows with any NaN
     valid = [!any(isnan, ts_raw[t, :]) for t in axes(ts_raw, 1)]

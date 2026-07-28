@@ -36,8 +36,44 @@ using CSV
 # Configuration — adjust paths and counts to your data layout
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ── Dataset selection ─────────────────────────────────────────────────────────
+# Choose which reduced state-space representation to analyse:
+#   :eof     — Börner EOF-reduced coordinates (redu1/2/3) in data/plasim
+#   :boxsalt — box-mean salinities (salt_na, salt_trop) in data/plasim_boxsalt,
+#              produced by scripts/compute_box_salinity.py.  This is a 2-D
+#              reduction (the Southern box has no Atlantic data), so the 3-D
+#              scatter figures are skipped and outputs get a "_boxsalt" suffix.
+const MODE = :boxsalt
+
+const DATASET_CONFIGS = Dict(
+    :eof => (
+        data_dir    = datadir("plasim"),
+        variables   = ["redu1", "redu2", "redu3"],
+        axis_labels = ["EOF 1", "EOF 2", "EOF 3"],
+        on_is_low   = true,    # AMOC-on has the lower redu1 (meridional S gradient)
+        out_suffix  = "",
+    ),
+    :boxsalt => (
+        data_dir    = datadir("plasim_boxsalt"),
+        variables   = ["salt_na", "salt_trop"],
+        axis_labels = ["N. Atlantic salinity (g/kg)", "Tropical salinity (g/kg)", ""],
+        on_is_low   = false,   # AMOC-on has the higher North Atlantic box salinity
+        out_suffix  = "_boxsalt",
+    ),
+)
+const CFG         = DATASET_CONFIGS[MODE]
+const AXIS_LABELS = CFG.axis_labels
+const ON_IS_LOW   = CFG.on_is_low
+const OUT_SUFFIX  = CFG.out_suffix
+
 # Directory containing the PlaSim NetCDF files
-const DATA_DIR = datadir("plasim")
+const DATA_DIR = CFG.data_dir
+
+# AMOC strength (a physical, reduction-independent diagnostic) is not stored in
+# the box-salinity files, so it is always read from the EOF dataset directory,
+# where the equilibrium and edge-track files carry the `amoc_strength` variable
+# under the same filenames.
+const AMOC_DIR = DATASET_CONFIGS[:eof].data_dir
 
 # CO2 level labels (used in filenames)
 const CO2_LABEL_CURRENT  = "360ppm"
@@ -47,8 +83,8 @@ const CO2_LABEL_PREINDUSTRIAL = "285ppm"
 const N_FILES_360 = 38
 const N_FILES_285 = 37
 
-# EOF dimensions to use from each file
-const VARIABLE_NAMES = ["redu1", "redu2", "redu3"]
+# Reduced-state coordinates to read from each file (set by MODE above)
+const VARIABLE_NAMES = CFG.variables
 const N_DIMS = length(VARIABLE_NAMES)
 
 # Convergence thresholds in EOF units — separate for each attractor (adjust if needed)
@@ -147,6 +183,17 @@ ts_ed_360  = load_plasim_state_timeseries(
     VARIABLE_NAMES)
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Equalise edge-run lengths across CO2 levels: the edge (saddle) equilibrium
+# runs differ in length between 285 and 360 ppm, so truncate the longer one to
+# the shorter so both the edge covariance and the plotted edge ellipse use the
+# same number of samples.  (The on/off runs are already equal length.)
+# ─────────────────────────────────────────────────────────────────────────────
+const N_ED_COMMON = min(size(ts_ed_285, 1), size(ts_ed_360, 1))
+ts_ed_285 = ts_ed_285[1:N_ED_COMMON, :]
+ts_ed_360 = ts_ed_360[1:N_ED_COMMON, :]
+@info "Edge equilibrium runs truncated to common length: $N_ED_COMMON steps"
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Local variability (covariance matrices needed for ellipse-based metrics)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -156,7 +203,8 @@ var_on_285  = compute_local_variability(
 var_off_285 = compute_local_variability(
     joinpath(DATA_DIR, "plasimelancholia_$(CO2_LABEL_PREINDUSTRIAL)_of.etc.nc"), VARIABLE_NAMES)
 var_ed_285  = compute_local_variability(
-    joinpath(DATA_DIR, "plasimelancholia_$(CO2_LABEL_PREINDUSTRIAL)_ed.etc.nc"), VARIABLE_NAMES)
+    joinpath(DATA_DIR, "plasimelancholia_$(CO2_LABEL_PREINDUSTRIAL)_ed.etc.nc"), VARIABLE_NAMES;
+    max_samples = N_ED_COMMON)
 
 @info "Computing local variability for 360 ppm..."
 var_on_360  = compute_local_variability(
@@ -164,7 +212,8 @@ var_on_360  = compute_local_variability(
 var_off_360 = compute_local_variability(
     joinpath(DATA_DIR, "plasimelancholia_$(CO2_LABEL_CURRENT)_of.etc.nc"), VARIABLE_NAMES)
 var_ed_360  = compute_local_variability(
-    joinpath(DATA_DIR, "plasimelancholia_$(CO2_LABEL_CURRENT)_ed.etc.nc"), VARIABLE_NAMES)
+    joinpath(DATA_DIR, "plasimelancholia_$(CO2_LABEL_CURRENT)_ed.etc.nc"), VARIABLE_NAMES;
+    max_samples = N_ED_COMMON)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Run resilience summary for both CO2 levels
@@ -182,6 +231,7 @@ summary_285 = plasim_resilience_summary(df_285, N_DIMS;
     edge_cov       = var_ed_285.covariance,
     sigma          = ELLIPSE_SIGMA,
     check_dims     = 2,
+    on_is_low      = ON_IS_LOW,
 )
 
 @info "Computing resilience summary for 360 ppm..."
@@ -196,6 +246,7 @@ summary_360 = plasim_resilience_summary(df_360, N_DIMS;
     edge_cov       = var_ed_360.covariance,
     sigma          = ELLIPSE_SIGMA,
     check_dims     = 2,
+    on_is_low      = ON_IS_LOW,
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -299,8 +350,8 @@ for (col_idx, (label, df_plot, summary, edge_st, ids, ts_on, ts_off, ts_ed)) in 
     ("360 ppm (current CO₂)",   df_360, summary_360, edge_360, ids_360, ts_on_360, ts_off_360, ts_ed_360),
 ])
     ax = Axis(fig1[1, col_idx];
-        xlabel    = "1st EOF",
-        ylabel    = "2nd EOF",
+        xlabel    = AXIS_LABELS[1],
+        ylabel    = AXIS_LABELS[2],
         title     = label,
         titlesize = 13,
     )
@@ -356,13 +407,16 @@ Legend(fig1[1, 3],
     labelsize = 11,
 )
 
-fig1_path = plotsdir("plasim_trajectories_scatter.png")
+fig1_path = plotsdir("plasim_trajectories_scatter$(OUT_SUFFIX).png")
 wsave(fig1_path, fig1)
 @info "Figure 1 saved to: $fig1_path"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Figure 1b: Trajectory scatter in full (EOF1, EOF2, EOF3) space
+# Only meaningful for a ≥3-D reduction (skipped for the 2-D box-salinity mode).
 # ─────────────────────────────────────────────────────────────────────────────
+
+if N_DIMS >= 3
 
 fig1b = Figure(size = (1400, 700))
 
@@ -422,9 +476,11 @@ Legend(fig1b[1, 3],
     labelsize = 11,
 )
 
-fig1b_path = plotsdir("plasim_trajectories_scatter_3d.png")
+fig1b_path = plotsdir("plasim_trajectories_scatter_3d$(OUT_SUFFIX).png")
 wsave(fig1b_path, fig1b)
 @info "Figure 1b saved to: $fig1b_path"
+
+end  # if N_DIMS >= 3  (Figure 1b)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Figure 1c: Equilibrium runs in (EOF1, EOF2) space
@@ -437,8 +493,8 @@ for (col_idx, (label, ts_on, ts_off, ts_ed, summary, edge_st)) in enumerate([
     ("360 ppm (current CO₂)",   ts_on_360, ts_off_360, ts_ed_360, summary_360, edge_360),
 ])
     ax = Axis(fig1c[1, col_idx];
-        xlabel    = "1st EOF",
-        ylabel    = "2nd EOF",
+        xlabel    = AXIS_LABELS[1],
+        ylabel    = AXIS_LABELS[2],
         title     = label,
         titlesize = 13,
     )
@@ -486,13 +542,16 @@ Legend(fig1c[1, 3],
     labelsize = 11,
 )
 
-fig1c_path = plotsdir("plasim_equilibrium_scatter.png")
+fig1c_path = plotsdir("plasim_equilibrium_scatter$(OUT_SUFFIX).png")
 wsave(fig1c_path, fig1c)
 @info "Figure 1c saved to: $fig1c_path"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Figure 1d: Equilibrium runs in (EOF1, EOF2, EOF3) space
+# Only meaningful for a ≥3-D reduction (skipped for the 2-D box-salinity mode).
 # ─────────────────────────────────────────────────────────────────────────────
+
+if N_DIMS >= 3
 
 fig1d = Figure(size = (1400, 700))
 
@@ -548,9 +607,11 @@ Legend(fig1d[1, 3],
     labelsize = 11,
 )
 
-fig1d_path = plotsdir("plasim_equilibrium_scatter_3d.png")
+fig1d_path = plotsdir("plasim_equilibrium_scatter_3d$(OUT_SUFFIX).png")
 wsave(fig1d_path, fig1d)
 @info "Figure 1d saved to: $fig1d_path"
+
+end  # if N_DIMS >= 3  (Figure 1d)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Figure 2: Bar chart — mean convergence times
@@ -590,7 +651,7 @@ Legend(fig2[1, 2],
     "CO₂ level",
 )
 
-fig2_path = plotsdir("plasim_convergence_times_bar.png")
+fig2_path = plotsdir("plasim_convergence_times_bar$(OUT_SUFFIX).png")
 wsave(fig2_path, fig2)
 @info "Figure 2 saved to: $fig2_path"
 
@@ -626,7 +687,7 @@ Legend(fig3[1, 2],
     "CO₂ level",
 )
 
-fig3_path = plotsdir("plasim_edge_distances_bar.png")
+fig3_path = plotsdir("plasim_edge_distances_bar$(OUT_SUFFIX).png")
 wsave(fig3_path, fig3)
 @info "Figure 3 saved to: $fig3_path"
 
@@ -639,27 +700,33 @@ results_to_save = Dict(
     "summary_285" => summary_285,
 )
 
-wsave(datadir("plasim", "resilience_summaries.jld2"), results_to_save)
-@info "Results saved to: $(datadir("plasim", "resilience_summaries.jld2"))"
+wsave(datadir("plasim", "resilience_summaries$(OUT_SUFFIX).jld2"), results_to_save)
+@info "Results saved to: $(datadir("plasim", "resilience_summaries$(OUT_SUFFIX).jld2"))"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Save key metrics to CSV
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Volume of the 1σ ellipsoid in 3D EOF space: V = (4π/3) · √det(C)
-ellipsoid_volume(C::Matrix) = (4π / 3) * sqrt(det(Symmetric(C)))
+# Size of the 1σ ellipsoid: (4π/3)·√det(C) in 3-D, π·√det(C) (ellipse area) in 2-D.
+function ellipsoid_volume(C::Matrix)
+    d = size(C, 1)
+    return d >= 3 ? (4π / 3) * sqrt(det(Symmetric(C[1:3, 1:3]))) :
+                    π * sqrt(det(Symmetric(C)))
+end
 
-# Mean AMOC strength from an equilibrium NetCDF file
+# Mean AMOC strength from an equilibrium NetCDF file (NaN if not stored, as is
+# the case for the box-salinity files which carry no amoc_strength variable).
 function mean_amoc_strength(filepath::String)
     NCDataset(filepath, "r") do ds
+        haskey(ds, "amoc_strength") || return NaN
         mean(skipmissing(ds["amoc_strength"][:]))
     end
 end
 
-amoc_on_285  = mean_amoc_strength(joinpath(DATA_DIR, "plasimelancholia_$(CO2_LABEL_PREINDUSTRIAL)_on.etc.nc"))
-amoc_off_285 = mean_amoc_strength(joinpath(DATA_DIR, "plasimelancholia_$(CO2_LABEL_PREINDUSTRIAL)_of.etc.nc"))
-amoc_on_360  = mean_amoc_strength(joinpath(DATA_DIR, "plasimelancholia_$(CO2_LABEL_CURRENT)_on.etc.nc"))
-amoc_off_360 = mean_amoc_strength(joinpath(DATA_DIR, "plasimelancholia_$(CO2_LABEL_CURRENT)_of.etc.nc"))
+amoc_on_285  = mean_amoc_strength(joinpath(AMOC_DIR, "plasimelancholia_$(CO2_LABEL_PREINDUSTRIAL)_on.etc.nc"))
+amoc_off_285 = mean_amoc_strength(joinpath(AMOC_DIR, "plasimelancholia_$(CO2_LABEL_PREINDUSTRIAL)_of.etc.nc"))
+amoc_on_360  = mean_amoc_strength(joinpath(AMOC_DIR, "plasimelancholia_$(CO2_LABEL_CURRENT)_on.etc.nc"))
+amoc_off_360 = mean_amoc_strength(joinpath(AMOC_DIR, "plasimelancholia_$(CO2_LABEL_CURRENT)_of.etc.nc"))
 
 ellipse_long_axis_1sigma(C::Matrix) = 2000 * sqrt(maximum(eigvals(Symmetric(C[1:2, 1:2]))))
 
@@ -692,7 +759,7 @@ metrics_df = DataFrame(
     mean_amoc_strength_Sv = [amoc_on_285, amoc_off_285, amoc_on_360, amoc_off_360],
 )
 
-csv_path = datadir("plasim", "resilience_metrics.csv")
+csv_path = datadir("plasim", "resilience_metrics$(OUT_SUFFIX).csv")
 CSV.write(csv_path, metrics_df)
 @info "Metrics CSV saved to: $csv_path"
 
@@ -766,15 +833,15 @@ Legend(fig4[2, 2],
     "CO₂ level",
 )
 
-fig4_path = plotsdir("plasim_local_variability.png")
+fig4_path = plotsdir("plasim_local_variability$(OUT_SUFFIX).png")
 wsave(fig4_path, fig4)
 @info "Figure 4 saved to: $fig4_path"
 
 # Display figures if running interactively
 display(fig1)
-display(fig1b)
+N_DIMS >= 3 && display(fig1b)
 display(fig1c)
-display(fig1d)
+N_DIMS >= 3 && display(fig1d)
 display(fig2)
 display(fig3)
 display(fig4)

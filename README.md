@@ -121,6 +121,25 @@ python scripts/plotting_paper.py
 
 Results are cached in `data/plasim/` and figures are written to `plots/`.
 
+### Choosing the state-space reduction (EOF vs. box salinity)
+
+The three analysis scripts can run on either of two reduced state-space representations, selected by a single `MODE` constant near the top of each:
+
+| `MODE` | Coordinates | Data dir | Dims |
+|--------|-------------|----------|------|
+| `:boxsalt` / `"boxsalt"` (default) | `salt_na`, `salt_trop` (box-mean salinities) | `data/plasim_boxsalt` | 2 |
+| `:eof` / `"eof"` | `redu1`, `redu2`, `redu3` (Börner EOFs) | `data/plasim` | 3 |
+
+Set `MODE` **consistently** in `plasim_edge_analysis.jl`, `plasim_export_paper_data.jl`, and `plotting_paper.py`, then run the three steps as above. In the default `:boxsalt` mode:
+
+- The box files are produced by `compute_box_salinity.py` (run that first).
+- It is a **2-D** reduction — the Southern box has no Atlantic data — so the 3-D scatter figures are skipped and the AMOC-on branch is the *saltier* North Atlantic box (handled via `on_is_low=false` in `classify_trajectories`).
+- The edge (saddle) equilibrium runs differ in length between 285 and 360 ppm, so the analysis truncates the longer to the shorter (`N_ED_COMMON`) before computing the edge covariance and ellipse, so both CO₂ levels use the same number of samples.
+- Outputs are written with a `_boxsalt` suffix so they never overwrite the EOF results: `resilience_metrics_boxsalt.csv`, `resilience_summaries_boxsalt.jld2`, `plots/plasim_*_boxsalt.png`, and paper CSVs in `data/plasim/paper_boxsalt/`.
+- The box files carry no `amoc_strength`, so the paper figure's top row shows an "AMOC strength not available" placeholder.
+
+The umbrella `synthesis_figure.py` reads the box-salinity metrics (`data/plasim/resilience_metrics_boxsalt.csv`) by default; point `PLASIM_CSV` back at `resilience_metrics.csv` to use the EOF metrics. Because the box files carry no AMOC strength, the PlaSim points are absent from the synthesis AMOC-strength panel in this mode.
+
 ---
 
 ## Dependencies
