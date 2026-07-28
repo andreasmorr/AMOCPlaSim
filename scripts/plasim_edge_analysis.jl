@@ -56,7 +56,7 @@ const DATASET_CONFIGS = Dict(
     :boxsalt => (
         data_dir    = datadir("plasim_boxsalt"),
         variables   = ["salt_na", "salt_trop"],
-        axis_labels = ["N. Atlantic salinity (g/kg)", "Tropical salinity (g/kg)", ""],
+        axis_labels = ["North Atlantic salinity (psu)", "Tropical salinity (psu)", ""],
         on_is_low   = false,   # AMOC-on has the higher North Atlantic box salinity
         out_suffix  = "_boxsalt",
     ),
@@ -183,17 +183,6 @@ ts_ed_360  = load_plasim_state_timeseries(
     VARIABLE_NAMES)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Equalise edge-run lengths across CO2 levels: the edge (saddle) equilibrium
-# runs differ in length between 285 and 360 ppm, so truncate the longer one to
-# the shorter so both the edge covariance and the plotted edge ellipse use the
-# same number of samples.  (The on/off runs are already equal length.)
-# ─────────────────────────────────────────────────────────────────────────────
-const N_ED_COMMON = min(size(ts_ed_285, 1), size(ts_ed_360, 1))
-ts_ed_285 = ts_ed_285[1:N_ED_COMMON, :]
-ts_ed_360 = ts_ed_360[1:N_ED_COMMON, :]
-@info "Edge equilibrium runs truncated to common length: $N_ED_COMMON steps"
-
-# ─────────────────────────────────────────────────────────────────────────────
 # Local variability (covariance matrices needed for ellipse-based metrics)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -203,8 +192,7 @@ var_on_285  = compute_local_variability(
 var_off_285 = compute_local_variability(
     joinpath(DATA_DIR, "plasimelancholia_$(CO2_LABEL_PREINDUSTRIAL)_of.etc.nc"), VARIABLE_NAMES)
 var_ed_285  = compute_local_variability(
-    joinpath(DATA_DIR, "plasimelancholia_$(CO2_LABEL_PREINDUSTRIAL)_ed.etc.nc"), VARIABLE_NAMES;
-    max_samples = N_ED_COMMON)
+    joinpath(DATA_DIR, "plasimelancholia_$(CO2_LABEL_PREINDUSTRIAL)_ed.etc.nc"), VARIABLE_NAMES)
 
 @info "Computing local variability for 360 ppm..."
 var_on_360  = compute_local_variability(
@@ -212,8 +200,7 @@ var_on_360  = compute_local_variability(
 var_off_360 = compute_local_variability(
     joinpath(DATA_DIR, "plasimelancholia_$(CO2_LABEL_CURRENT)_of.etc.nc"), VARIABLE_NAMES)
 var_ed_360  = compute_local_variability(
-    joinpath(DATA_DIR, "plasimelancholia_$(CO2_LABEL_CURRENT)_ed.etc.nc"), VARIABLE_NAMES;
-    max_samples = N_ED_COMMON)
+    joinpath(DATA_DIR, "plasimelancholia_$(CO2_LABEL_CURRENT)_ed.etc.nc"), VARIABLE_NAMES)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Run resilience summary for both CO2 levels

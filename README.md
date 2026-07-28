@@ -134,7 +134,6 @@ Set `MODE` **consistently** in `plasim_edge_analysis.jl`, `plasim_export_paper_d
 
 - The box files are produced by `compute_box_salinity.py` (run that first).
 - It is a **2-D** reduction — the Southern box has no Atlantic data — so the 3-D scatter figures are skipped and the AMOC-on branch is the *saltier* North Atlantic box (handled via `on_is_low=false` in `classify_trajectories`).
-- The edge (saddle) equilibrium runs differ in length between 285 and 360 ppm, so the analysis truncates the longer to the shorter (`N_ED_COMMON`) before computing the edge covariance and ellipse, so both CO₂ levels use the same number of samples.
 - Outputs are written with a `_boxsalt` suffix so they never overwrite the EOF results: `resilience_metrics_boxsalt.csv`, `resilience_summaries_boxsalt.jld2`, `plots/plasim_*_boxsalt.png`, and paper CSVs in `data/plasim/paper_boxsalt/`.
 - The box files carry no `amoc_strength`, so the paper figure's top row shows an "AMOC strength not available" placeholder.
 

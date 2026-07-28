@@ -48,7 +48,7 @@ DATASET_CONFIGS = {
     ),
     "boxsalt": dict(
         paper_subdir="paper_boxsalt",
-        axis_labels=("N. Atlantic salinity (g/kg)", "Tropical salinity (g/kg)"),
+        axis_labels=("North Atlantic salinity (psu)", "Tropical salinity (psu)"),
         out_suffix="_boxsalt",
     ),
 }

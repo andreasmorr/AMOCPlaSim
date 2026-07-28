@@ -594,20 +594,13 @@ end
 Load a converged-state NetCDF file and return the full time series as a
 matrix of shape `(n_time × n_dims)`.  NaN rows (NetCDF fill values) are
 kept so that the caller can decide how to handle them.
-
-`max_samples` truncates the series to its first `max_samples` time steps
-(used to equalise run lengths across CO2 levels); `nothing` keeps all steps.
 """
-function load_plasim_state_timeseries(filepath::String, variable_names::Vector{String};
-                                      max_samples::Union{Nothing, Int} = nothing)
+function load_plasim_state_timeseries(filepath::String, variable_names::Vector{String})
     NCDataset(filepath, "r") do ds
         n_time = length(ds["time"])
         mat = Matrix{Float64}(undef, n_time, length(variable_names))
         for (k, vname) in enumerate(variable_names)
             mat[:, k] = Float64.(coalesce.(ds[vname][:], NaN))
-        end
-        if max_samples !== nothing && max_samples < n_time
-            mat = mat[1:max_samples, :]
         end
         return mat
     end
@@ -656,9 +649,8 @@ second-order statistics.
 - `mean_ac_time::Float64`               — mean integrated autocorrelation time (yr)
 - `n_samples::Int`                      — number of valid (non-NaN) time steps used
 """
-function compute_local_variability(filepath::String, variable_names::Vector{String};
-                                   max_samples::Union{Nothing, Int} = nothing)
-    ts_raw = load_plasim_state_timeseries(filepath, variable_names; max_samples)
+function compute_local_variability(filepath::String, variable_names::Vector{String})
+    ts_raw = load_plasim_state_timeseries(filepath, variable_names)
 
     # Drop rows with any NaN
     valid = [!any(isnan, ts_raw[t, :]) for t in axes(ts_raw, 1)]

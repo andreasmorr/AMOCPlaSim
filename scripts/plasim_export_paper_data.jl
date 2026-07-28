@@ -350,13 +350,6 @@ function main()
         joinpath(DATA_DIR, "plasimelancholia_$(CO2_LABEL_CURRENT)_ed.etc.nc"),
         VARIABLE_NAMES)
 
-    # Equalise edge-run lengths across CO2 levels (truncate the longer to the
-    # shorter) so the exported edge ellipse and edge covariance are comparable.
-    n_ed_common = min(size(ts_ed_285, 1), size(ts_ed_360, 1))
-    ts_ed_285 = ts_ed_285[1:n_ed_common, :]
-    ts_ed_360 = ts_ed_360[1:n_ed_common, :]
-    @info "Edge equilibrium runs truncated to common length: $n_ed_common steps"
-
     # ── Local variability ─────────────────────────────────────────────────────
     @info "Computing local variability for 285 ppm..."
     var_on_285  = compute_local_variability(
@@ -367,7 +360,7 @@ function main()
         VARIABLE_NAMES)
     var_ed_285  = compute_local_variability(
         joinpath(DATA_DIR, "plasimelancholia_$(CO2_LABEL_PREINDUSTRIAL)_ed.etc.nc"),
-        VARIABLE_NAMES; max_samples = n_ed_common)
+        VARIABLE_NAMES)
 
     @info "Computing local variability for 360 ppm..."
     var_on_360  = compute_local_variability(
@@ -378,7 +371,7 @@ function main()
         VARIABLE_NAMES)
     var_ed_360  = compute_local_variability(
         joinpath(DATA_DIR, "plasimelancholia_$(CO2_LABEL_CURRENT)_ed.etc.nc"),
-        VARIABLE_NAMES; max_samples = n_ed_common)
+        VARIABLE_NAMES)
 
     # ── Resilience summaries ──────────────────────────────────────────────────
     @info "Computing resilience summary for 285 ppm..."
