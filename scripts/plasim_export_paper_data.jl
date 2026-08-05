@@ -29,10 +29,11 @@ using CSV
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── Dataset selection (must match plasim_edge_analysis.jl) ────────────────────
-#   :eof     — EOF-reduced coordinates (redu1/2/3) in data/plasim → paper/
-#   :boxsalt — box-mean salinities (salt_na, salt_trop) in data/plasim_boxsalt
-#              → paper_boxsalt/  (see scripts/compute_box_salinity.py)
-const MODE = :boxsalt
+#   :eof          — EOF-reduced coordinates (redu1/2/3) in data/plasim → paper/
+#   :boxsalt      — box-mean salinities (salt_na, salt_trop, 0-100 m) → paper_boxsalt/
+#   :boxsalt_deep — deep box salinities (salt_na_deep full column,
+#                   salt_trop_deep 0-500 m) → paper_boxsalt_deep/
+const MODE = :boxsalt_deep
 
 const DATASET_CONFIGS = Dict(
     :eof => (
@@ -46,6 +47,12 @@ const DATASET_CONFIGS = Dict(
         variables    = ["salt_na", "salt_trop"],
         on_is_low    = false,
         paper_subdir = "paper_boxsalt",
+    ),
+    :boxsalt_deep => (   # deep-box configuration: NA full column, Tropical 0-500 m
+        data_dir     = datadir("plasim_boxsalt"),
+        variables    = ["salt_na_deep", "salt_trop_deep"],
+        on_is_low    = false,
+        paper_subdir = "paper_boxsalt_deep",
     ),
 )
 const CFG = DATASET_CONFIGS[MODE]
@@ -65,7 +72,7 @@ const N_DIMS                  = length(VARIABLE_NAMES)
 const EPSILON_ON              = 0.1
 const EPSILON_OFF             = 0.2
 const FINAL_FRACTION          = 0.1
-const ELLIPSE_SIGMA           = 3
+const ELLIPSE_SIGMA           = 4
 
 # ─────────────────────────────────────────────────────────────────────────────
 # File pattern helpers
@@ -313,10 +320,8 @@ function main()
     att_off_285 = load_plasim_state_mean(
         joinpath(DATA_DIR, "plasimelancholia_$(CO2_LABEL_PREINDUSTRIAL)_of.etc.nc"),
         VARIABLE_NAMES)
-    edge_285    = load_plasim_state_mean(
-        joinpath(DATA_DIR, "plasimelancholia_$(CO2_LABEL_PREINDUSTRIAL)_ed.etc.nc"),
-        VARIABLE_NAMES)
     attractors_285 = Dict{Int, Vector{Float64}}(1 => att_on_285, 2 => att_off_285)
+    # edge_285 (mean) and edge_cov_285 are computed from the trimmed edge trajectory below.
 
     ts_on_285  = load_plasim_state_timeseries(
         joinpath(DATA_DIR, "plasimelancholia_$(CO2_LABEL_PREINDUSTRIAL)_on.etc.nc"),
@@ -335,10 +340,8 @@ function main()
     att_off_360 = load_plasim_state_mean(
         joinpath(DATA_DIR, "plasimelancholia_$(CO2_LABEL_CURRENT)_of.etc.nc"),
         VARIABLE_NAMES)
-    edge_360    = load_plasim_state_mean(
-        joinpath(DATA_DIR, "plasimelancholia_$(CO2_LABEL_CURRENT)_ed.etc.nc"),
-        VARIABLE_NAMES)
     attractors_360 = Dict{Int, Vector{Float64}}(1 => att_on_360, 2 => att_off_360)
+    # edge_360 (mean) and edge_cov_360 are computed from the trimmed edge trajectory below.
 
     ts_on_360  = load_plasim_state_timeseries(
         joinpath(DATA_DIR, "plasimelancholia_$(CO2_LABEL_CURRENT)_on.etc.nc"),
@@ -350,6 +353,22 @@ function main()
         joinpath(DATA_DIR, "plasimelancholia_$(CO2_LABEL_CURRENT)_ed.etc.nc"),
         VARIABLE_NAMES)
 
+    # ── Trim the start of the edge (saddle) equilibrium trajectories ───────────
+    # Applied here (NOT in the data preprocessing); must match plasim_edge_analysis.jl.
+    edge_cut = Dict(CO2_LABEL_PREINDUSTRIAL => 4, CO2_LABEL_CURRENT => 60)  # years
+    ts_ed_285 = ts_ed_285[(edge_cut[CO2_LABEL_PREINDUSTRIAL] + 1):end, :]
+    ts_ed_360 = ts_ed_360[(edge_cut[CO2_LABEL_CURRENT] + 1):end, :]
+    @info "Edge equilibrium starts trimmed: 285 ppm -$(edge_cut[CO2_LABEL_PREINDUSTRIAL]) yr, 360 ppm -$(edge_cut[CO2_LABEL_CURRENT]) yr"
+
+    # Edge-state mean and covariance from the trimmed edge trajectories.
+    edge_mean_cov(ts) = begin
+        valid = [!any(isnan, ts[t, :]) for t in axes(ts, 1)]
+        d = ts[valid, :]
+        (vec(mean(d, dims = 1)), cov(d))
+    end
+    edge_285, edge_cov_285 = edge_mean_cov(ts_ed_285)
+    edge_360, edge_cov_360 = edge_mean_cov(ts_ed_360)
+
     # ── Local variability ─────────────────────────────────────────────────────
     @info "Computing local variability for 285 ppm..."
     var_on_285  = compute_local_variability(
@@ -358,9 +377,6 @@ function main()
     var_off_285 = compute_local_variability(
         joinpath(DATA_DIR, "plasimelancholia_$(CO2_LABEL_PREINDUSTRIAL)_of.etc.nc"),
         VARIABLE_NAMES)
-    var_ed_285  = compute_local_variability(
-        joinpath(DATA_DIR, "plasimelancholia_$(CO2_LABEL_PREINDUSTRIAL)_ed.etc.nc"),
-        VARIABLE_NAMES)
 
     @info "Computing local variability for 360 ppm..."
     var_on_360  = compute_local_variability(
@@ -368,9 +384,6 @@ function main()
         VARIABLE_NAMES)
     var_off_360 = compute_local_variability(
         joinpath(DATA_DIR, "plasimelancholia_$(CO2_LABEL_CURRENT)_of.etc.nc"),
-        VARIABLE_NAMES)
-    var_ed_360  = compute_local_variability(
-        joinpath(DATA_DIR, "plasimelancholia_$(CO2_LABEL_CURRENT)_ed.etc.nc"),
         VARIABLE_NAMES)
 
     # ── Resilience summaries ──────────────────────────────────────────────────
@@ -383,7 +396,7 @@ function main()
         edge_state     = edge_285,
         cov_on         = var_on_285.covariance,
         cov_off        = var_off_285.covariance,
-        edge_cov       = var_ed_285.covariance,
+        edge_cov       = edge_cov_285,
         sigma          = ELLIPSE_SIGMA,
         check_dims     = 2,
         on_is_low      = ON_IS_LOW,
@@ -398,7 +411,7 @@ function main()
         edge_state     = edge_360,
         cov_on         = var_on_360.covariance,
         cov_off        = var_off_360.covariance,
-        edge_cov       = var_ed_360.covariance,
+        edge_cov       = edge_cov_360,
         sigma          = ELLIPSE_SIGMA,
         check_dims     = 2,
         on_is_low      = ON_IS_LOW,

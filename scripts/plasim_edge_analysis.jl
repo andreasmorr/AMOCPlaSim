@@ -39,11 +39,13 @@ using CSV
 # ── Dataset selection ─────────────────────────────────────────────────────────
 # Choose which reduced state-space representation to analyse:
 #   :eof     — Börner EOF-reduced coordinates (redu1/2/3) in data/plasim
-#   :boxsalt — box-mean salinities (salt_na, salt_trop) in data/plasim_boxsalt,
-#              produced by scripts/compute_box_salinity.py.  This is a 2-D
-#              reduction (the Southern box has no Atlantic data), so the 3-D
-#              scatter figures are skipped and outputs get a "_boxsalt" suffix.
-const MODE = :boxsalt
+#   :boxsalt — box-mean salinities (salt_na, salt_trop, 0-100 m) in
+#              data/plasim_boxsalt, produced by scripts/compute_box_salinity.py.
+#   :boxsalt_deep — deep box-mean salinities (salt_na_deep = full column,
+#              salt_trop_deep = 0-500 m) from the same files.
+# The box-salinity modes are 2-D reductions (the Southern box has no Atlantic
+# data), so the 3-D scatter figures are skipped and outputs get a mode suffix.
+const MODE = :boxsalt_deep
 
 const DATASET_CONFIGS = Dict(
     :eof => (
@@ -59,6 +61,13 @@ const DATASET_CONFIGS = Dict(
         axis_labels = ["North Atlantic salinity (psu)", "Tropical salinity (psu)", ""],
         on_is_low   = false,   # AMOC-on has the higher North Atlantic box salinity
         out_suffix  = "_boxsalt",
+    ),
+    :boxsalt_deep => (   # deep-box configuration: NA full column, Tropical 0-500 m
+        data_dir    = datadir("plasim_boxsalt"),
+        variables   = ["salt_na_deep", "salt_trop_deep"],
+        axis_labels = ["North Atlantic salinity (psu, 0-1000 m)", "Tropical salinity (psu, 0-500 m)", ""],
+        on_is_low   = false,
+        out_suffix  = "_boxsalt_deep",
     ),
 )
 const CFG         = DATASET_CONFIGS[MODE]
@@ -96,7 +105,7 @@ const EPSILON_OFF = 0.2   # threshold for AMOC-off trajectories
 const FINAL_FRACTION = 0.1
 
 # Number of standard deviations for Gaussian ellipse plots and ellipse-based metrics
-const ELLIPSE_SIGMA = 3
+const ELLIPSE_SIGMA = 4
 
 # ─────────────────────────────────────────────────────────────────────────────
 # File pattern helpers
@@ -143,10 +152,8 @@ att_on_285  = load_plasim_state_mean(
 att_off_285 = load_plasim_state_mean(
     joinpath(DATA_DIR, "plasimelancholia_$(CO2_LABEL_PREINDUSTRIAL)_of.etc.nc"),
     VARIABLE_NAMES)
-edge_285    = load_plasim_state_mean(
-    joinpath(DATA_DIR, "plasimelancholia_$(CO2_LABEL_PREINDUSTRIAL)_ed.etc.nc"),
-    VARIABLE_NAMES)
 attractors_285 = Dict{Int, Vector{Float64}}(1 => att_on_285, 2 => att_off_285)
+# edge_285 (mean) and edge_cov_285 are computed from the trimmed edge trajectory below.
 
 # Full time series for the equilibrium runs (used for trajectory plots)
 ts_on_285  = load_plasim_state_timeseries(
@@ -166,10 +173,8 @@ att_on_360  = load_plasim_state_mean(
 att_off_360 = load_plasim_state_mean(
     joinpath(DATA_DIR, "plasimelancholia_$(CO2_LABEL_CURRENT)_of.etc.nc"),
     VARIABLE_NAMES)
-edge_360    = load_plasim_state_mean(
-    joinpath(DATA_DIR, "plasimelancholia_$(CO2_LABEL_CURRENT)_ed.etc.nc"),
-    VARIABLE_NAMES)
 attractors_360 = Dict{Int, Vector{Float64}}(1 => att_on_360, 2 => att_off_360)
+# edge_360 (mean) and edge_cov_360 are computed from the trimmed edge trajectory below.
 
 # Full time series for the equilibrium runs (used for trajectory plots)
 ts_on_360  = load_plasim_state_timeseries(
@@ -183,6 +188,26 @@ ts_ed_360  = load_plasim_state_timeseries(
     VARIABLE_NAMES)
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Trim the start of the edge (saddle) equilibrium trajectories.
+# Applied here in the analysis (NOT in the data preprocessing): the first years
+# of each edge run are a transient before the trajectory settles on the saddle,
+# so they are dropped before the edge mean / covariance / ellipse are computed.
+# ─────────────────────────────────────────────────────────────────────────────
+const EDGE_CUT = Dict(CO2_LABEL_PREINDUSTRIAL => 4, CO2_LABEL_CURRENT => 60)  # years
+ts_ed_285 = ts_ed_285[(EDGE_CUT[CO2_LABEL_PREINDUSTRIAL] + 1):end, :]
+ts_ed_360 = ts_ed_360[(EDGE_CUT[CO2_LABEL_CURRENT] + 1):end, :]
+@info "Edge equilibrium starts trimmed: 285 ppm -$(EDGE_CUT[CO2_LABEL_PREINDUSTRIAL]) yr, 360 ppm -$(EDGE_CUT[CO2_LABEL_CURRENT]) yr"
+
+# Edge-state mean and covariance from the trimmed edge trajectories (NaN rows dropped).
+function _edge_mean_cov(ts::Matrix)
+    valid = [!any(isnan, ts[t, :]) for t in axes(ts, 1)]
+    d = ts[valid, :]
+    return vec(mean(d, dims = 1)), cov(d)
+end
+edge_285, edge_cov_285 = _edge_mean_cov(ts_ed_285)
+edge_360, edge_cov_360 = _edge_mean_cov(ts_ed_360)
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Local variability (covariance matrices needed for ellipse-based metrics)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -191,16 +216,12 @@ var_on_285  = compute_local_variability(
     joinpath(DATA_DIR, "plasimelancholia_$(CO2_LABEL_PREINDUSTRIAL)_on.etc.nc"), VARIABLE_NAMES)
 var_off_285 = compute_local_variability(
     joinpath(DATA_DIR, "plasimelancholia_$(CO2_LABEL_PREINDUSTRIAL)_of.etc.nc"), VARIABLE_NAMES)
-var_ed_285  = compute_local_variability(
-    joinpath(DATA_DIR, "plasimelancholia_$(CO2_LABEL_PREINDUSTRIAL)_ed.etc.nc"), VARIABLE_NAMES)
 
 @info "Computing local variability for 360 ppm..."
 var_on_360  = compute_local_variability(
     joinpath(DATA_DIR, "plasimelancholia_$(CO2_LABEL_CURRENT)_on.etc.nc"), VARIABLE_NAMES)
 var_off_360 = compute_local_variability(
     joinpath(DATA_DIR, "plasimelancholia_$(CO2_LABEL_CURRENT)_of.etc.nc"), VARIABLE_NAMES)
-var_ed_360  = compute_local_variability(
-    joinpath(DATA_DIR, "plasimelancholia_$(CO2_LABEL_CURRENT)_ed.etc.nc"), VARIABLE_NAMES)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Run resilience summary for both CO2 levels
@@ -215,7 +236,7 @@ summary_285 = plasim_resilience_summary(df_285, N_DIMS;
     edge_state     = edge_285,
     cov_on         = var_on_285.covariance,
     cov_off        = var_off_285.covariance,
-    edge_cov       = var_ed_285.covariance,
+    edge_cov       = edge_cov_285,
     sigma          = ELLIPSE_SIGMA,
     check_dims     = 2,
     on_is_low      = ON_IS_LOW,
@@ -230,7 +251,7 @@ summary_360 = plasim_resilience_summary(df_360, N_DIMS;
     edge_state     = edge_360,
     cov_on         = var_on_360.covariance,
     cov_off        = var_off_360.covariance,
-    edge_cov       = var_ed_360.covariance,
+    edge_cov       = edge_cov_360,
     sigma          = ELLIPSE_SIGMA,
     check_dims     = 2,
     on_is_low      = ON_IS_LOW,

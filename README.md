@@ -45,7 +45,7 @@ AMOCPlaSim/
 For each CO₂ level (285 ppm, 360 ppm) the script:
 1. Loads all NetCDF edge-track files and classifies trajectories as converging to AMOC-on or AMOC-off.
 2. Loads attractor and edge-state positions from converged equilibrium files.
-3. Fits Gaussian covariance ellipsoids (at a chosen nσ level, default 3σ) to each state in EOF space.
+3. Fits Gaussian covariance ellipsoids (at a chosen nσ level, `ELLIPSE_SIGMA`, currently 4σ) to each state in EOF space. The start of each edge (saddle) equilibrium run is trimmed before its mean/covariance/ellipse are computed (transient spin-up; 285 ppm −4 yr, 360 ppm −60 yr, set by `EDGE_CUT` in the analysis and export scripts — not in the data preprocessing).
 4. Computes two primary resilience metrics:
    - **Convergence time**: transit time from last visit inside the edge ellipse to first entry into the target attractor ellipse (in the EOF1–EOF2 plane).
    - **Edge-to-attractor distance**: gap between the surfaces of the edge and attractor ellipsoids (zero if overlapping).
@@ -123,21 +123,22 @@ Results are cached in `data/plasim/` and figures are written to `plots/`.
 
 ### Choosing the state-space reduction (EOF vs. box salinity)
 
-The three analysis scripts can run on either of two reduced state-space representations, selected by a single `MODE` constant near the top of each:
+The three analysis scripts can run on any of three reduced state-space representations, selected by a single `MODE` constant near the top of each:
 
 | `MODE` | Coordinates | Data dir | Dims |
 |--------|-------------|----------|------|
-| `:boxsalt` / `"boxsalt"` (default) | `salt_na`, `salt_trop` (box-mean salinities) | `data/plasim_boxsalt` | 2 |
+| `:boxsalt_deep` / `"boxsalt_deep"` (default) | `salt_na_deep` (full column), `salt_trop_deep` (0–500 m) | `data/plasim_boxsalt` | 2 |
+| `:boxsalt` / `"boxsalt"` | `salt_na`, `salt_trop` (0–100 m box-mean salinities) | `data/plasim_boxsalt` | 2 |
 | `:eof` / `"eof"` | `redu1`, `redu2`, `redu3` (Börner EOFs) | `data/plasim` | 3 |
 
-Set `MODE` **consistently** in `plasim_edge_analysis.jl`, `plasim_export_paper_data.jl`, and `plotting_paper.py`, then run the three steps as above. In the default `:boxsalt` mode:
+Set `MODE` **consistently** in `plasim_edge_analysis.jl`, `plasim_export_paper_data.jl`, and `plotting_paper.py`, then run the three steps as above. In the box-salinity modes:
 
-- The box files are produced by `compute_box_salinity.py` (run that first).
-- It is a **2-D** reduction — the Southern box has no Atlantic data — so the 3-D scatter figures are skipped and the AMOC-on branch is the *saltier* North Atlantic box (handled via `on_is_low=false` in `classify_trajectories`).
-- Outputs are written with a `_boxsalt` suffix so they never overwrite the EOF results: `resilience_metrics_boxsalt.csv`, `resilience_summaries_boxsalt.jld2`, `plots/plasim_*_boxsalt.png`, and paper CSVs in `data/plasim/paper_boxsalt/`.
-- The box files carry no `amoc_strength`, so the paper figure's top row shows an "AMOC strength not available" placeholder.
+- The box files are produced by `compute_box_salinity.py` (run that first); each file carries both the shallow and deep variables.
+- Each is a **2-D** reduction — the Southern box has no Atlantic data — so the 3-D scatter figures are skipped and the AMOC-on branch is the *saltier* North Atlantic box (handled via `on_is_low=false` in `classify_trajectories`). Note the deep NA box (full column) barely distinguishes AMOC-on from AMOC-off, since it is dominated by the stable deep ocean.
+- Outputs are written with a mode suffix so they never overwrite each other or the EOF results: `resilience_metrics_<suffix>.csv`, `resilience_summaries_<suffix>.jld2`, `plots/plasim_*_<suffix>.png`, and paper CSVs in `data/plasim/paper_<suffix>/`, where `<suffix>` is `boxsalt` or `boxsalt_deep`.
+- The box files carry no `amoc_strength`, so it is read from the EOF equilibrium/edge-track files (`AMOC_DIR = data/plasim`) for the paper-figure top row and the metrics CSV.
 
-The umbrella `synthesis_figure.py` reads the box-salinity metrics (`data/plasim/resilience_metrics_boxsalt.csv`) by default; point `PLASIM_CSV` back at `resilience_metrics.csv` to use the EOF metrics. Because the box files carry no AMOC strength, the PlaSim points are absent from the synthesis AMOC-strength panel in this mode.
+The umbrella `synthesis_figure.py` reads the deep box-salinity metrics (`data/plasim/resilience_metrics_boxsalt_deep.csv`, matching the pipeline default); point `PLASIM_CSV` at `resilience_metrics_boxsalt.csv` (shallow) or `resilience_metrics.csv` (EOF) for the other reductions.
 
 ---
 

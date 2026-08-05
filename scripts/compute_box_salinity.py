@@ -4,14 +4,20 @@ compute_box_salinity.py — box-mean salinity time series from PlaSim edge track
 
 Reads the zonally-averaged salinity fields ``s(time, depth, lat)`` produced by
 Börner et al. (files ``plasimedge_<co2>_edgetrack_itx<NNN>_<branch>.s_zonav.nc``
-in the ``285ppm`` / ``360ppm`` source folders) and reduces each field to three
-box-mean salinity time series — one per perturbation box (North Atlantic,
-Tropical, Southern) — using the box geometry re-created for the PlaSim grid in
-``../plotting_perturbations.py`` (CLIMBER-X boxes, no tapering):
+in the ``285ppm`` / ``360ppm`` source folders) and reduces each field to box-mean
+salinity time series using the box geometry re-created for the PlaSim grid in
+``../plotting_perturbations.py`` (CLIMBER-X boxes, no tapering).  Two depth
+configurations are written side by side:
 
-    box_na     35°N – 80°N , top 100 m   (top 2 depth levels: 25 m, 75 m)
-    box_trop   35°S – 35°N , top 100 m
-    box_south  90°S – 35°S , top 100 m
+    shallow                              deep
+    salt_na     35N-80N , 0-100 m        salt_na_deep     35N-80N , 0-1000 m
+    salt_trop   35S-35N , 0-100 m        salt_trop_deep   35S-35N , 0-500 m
+    salt_south  90S-35S , 0-100 m        salt_south_deep  90S-35S , 0-100 m
+
+(top 100 m = top 2 levels; 500 m is the cell edge below the 450 m layer = top 8
+levels; 1000 m selects the top 13 levels with bottom cell edge 1025 m; the
+Southern box is all-NaN at any depth, so salt_south_deep duplicates salt_south.)
+All six series are written into the same output files.
 
 Because the input field is already zonally averaged, the CLIMBER-X Atlantic-basin
 restriction (NA/Trop) reduces to a plain latitude band; each box mean is a
@@ -50,6 +56,7 @@ import argparse
 import glob
 import os
 import re
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -62,18 +69,37 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_SRC_ROOT = Path("/Volumes/KINGSTON/BoernerEtAl")
 OUT_ROOT = SCRIPT_DIR.parent / "data" / "plasim_boxsalt"
 
-# Box bottom: closest PlaSim cell face to the CLIMBER-X 105 m box (top 2 layers).
-BOX_DEPTH_MAX = 100.0
+# Box depths.  SHALLOW_DEPTH is the closest PlaSim cell face to the CLIMBER-X
+# 105 m box (top 2 layers, 0-100 m).  The "deep" configuration copies the boxes
+# but takes the North Atlantic down to ~1000 m and the Tropical box down to the
+# 500 m cell edge (the bottom face of the 450 m layer = top 8 layers).  The
+# Southern box is unchanged (it has no Atlantic data at any depth, so it is
+# all-NaN regardless of the depth limit).
+SHALLOW_DEPTH   = 100.0     # top 2 layers (25 m, 75 m)
+TROP_DEEP_DEPTH = 500.0     # top 8 layers (25..450 m); 500 m is an exact cell edge
+NA_DEEP_DEPTH   = 1000.0    # top 13 layers (25..950 m); bottom cell edge 1025 m (~1000 m)
+# depth_max = None  ->  full water column
 
 # Box latitude bands (cell-centre test, identical to plotting_perturbations.py).
 BOXES = {
-    "salt_na":    dict(lat_min=35.0,  lat_max=80.0,
-                       long_name="North Atlantic box mean salinity (35-80N, 0-100 m)"),
-    "salt_trop":  dict(lat_min=-35.0, lat_max=35.0,
-                       long_name="Tropical box mean salinity (35S-35N, 0-100 m)"),
-    "salt_south": dict(lat_min=-90.0, lat_max=-35.0,
-                       long_name="Southern box mean salinity (90S-35S, 0-100 m)"),
+    "salt_na":         dict(lat_min=35.0,  lat_max=80.0,  depth_max=SHALLOW_DEPTH,
+                            long_name="North Atlantic box mean salinity (35-80N, 0-100 m)"),
+    "salt_trop":       dict(lat_min=-35.0, lat_max=35.0,  depth_max=SHALLOW_DEPTH,
+                            long_name="Tropical box mean salinity (35S-35N, 0-100 m)"),
+    "salt_south":      dict(lat_min=-90.0, lat_max=-35.0, depth_max=SHALLOW_DEPTH,
+                            long_name="Southern box mean salinity (90S-35S, 0-100 m)"),
+    "salt_na_deep":    dict(lat_min=35.0,  lat_max=80.0,  depth_max=NA_DEEP_DEPTH,
+                            long_name="North Atlantic deep box mean salinity (35-80N, 0-1000 m)"),
+    "salt_trop_deep":  dict(lat_min=-35.0, lat_max=35.0,  depth_max=TROP_DEEP_DEPTH,
+                            long_name="Tropical deep box mean salinity (35S-35N, 0-500 m)"),
+    "salt_south_deep": dict(lat_min=-90.0, lat_max=-35.0, depth_max=SHALLOW_DEPTH,
+                            long_name="Southern deep box mean salinity (90S-35S, 0-100 m)"),
 }
+
+
+def _depth_attr(box: dict):
+    """NetCDF attribute value for a box's depth extent."""
+    return "full water column" if box["depth_max"] is None else box["depth_max"]
 
 # Track order (matches the example .etc.nc files).
 TRACKS = ["upper", "lower"]          # upper -> AMOC-on, lower -> AMOC-off
@@ -111,15 +137,18 @@ def box_means(s: np.ndarray, lat: np.ndarray, depth: np.ndarray) -> dict[str, np
 
     ``s`` has shape (time, depth, lat); returns {box_name: (time,)}.  Weights are
     ``cos(lat) * layer_thickness``; NaN (land) cells are excluded from both the
-    weighted sum and the weight normalisation.
+    weighted sum and the weight normalisation.  Each box is averaged over its own
+    depth range (``depth_max`` = None means the full water column), so the full
+    depth axis must be supplied.
     """
     thick = layer_thickness(depth)                 # (depth,)
     coslat = np.cos(np.deg2rad(lat))               # (lat,)
     weight = thick[:, None] * coslat[None, :]      # (depth, lat)
-    dsel = depth <= BOX_DEPTH_MAX                   # top layers
 
     out: dict[str, np.ndarray] = {}
     for name, box in BOXES.items():
+        dmax = box["depth_max"]
+        dsel = np.ones(len(depth), dtype=bool) if dmax is None else (depth <= dmax)
         lsel = (lat >= box["lat_min"]) & (lat <= box["lat_max"])
         sub = s[:, dsel][:, :, lsel]               # (time, nd, nl)
         w = weight[dsel][:, lsel]                   # (nd, nl)
@@ -173,7 +202,7 @@ def build_dataset(per_track: dict[str, dict[str, np.ndarray]],
             ("track", "time"), arr,
             {"long_name": box["long_name"], "units": "g/kg",
              "box_lat_min": box["lat_min"], "box_lat_max": box["lat_max"],
-             "box_depth_max": BOX_DEPTH_MAX},
+             "box_depth_max": _depth_attr(box)},
         )
 
     ds = xr.Dataset(
@@ -190,8 +219,8 @@ def build_dataset(per_track: dict[str, dict[str, np.ndarray]],
                     "PlaSim-LSG zonally-averaged salinity (s_zonav) fields.",
             "source": "Data repository: https://doi.org/10.5281/zenodo.17053348",
             "processing": "compute_box_salinity.py — volume-weighted (cos(lat) x layer "
-                          "thickness) mean over each box's (lat x depth) cells, top "
-                          f"{BOX_DEPTH_MAX:.0f} m, land cells excluded.",
+                          "thickness) mean over each box's (lat x depth) cells (see per-"
+                          "variable box_depth_max), land cells excluded.",
             "co2_level": co2,
             "source_itx_index": src_index,
             "source_file_upper": src_files["upper"],
@@ -262,27 +291,28 @@ def atlantic_mask():
 
 
 def equilibrium_box_means(path: Path) -> dict[str, np.ndarray]:
-    """Atlantic zonal mean of the 3D salinity field, then the same box means.
+    """Atlantic zonal mean of the full 3D salinity field, then the box means.
 
-    Only the top layers used by the boxes (0-100 m) are read and zonally
-    averaged, keeping memory modest for the large (multi-GB) equilibrium files.
+    The deep boxes span the full water column, so all depth levels are read.  To
+    keep memory modest for the large (multi-GB) equilibrium files, the Atlantic
+    zonal mean is accumulated in time chunks.
     """
-    ndep = int(np.sum(_top_depth_flag()))        # number of top layers (<=100 m)
-    mask = atlantic_mask().isel(depth=slice(0, ndep))
+    mask = np.asarray(atlantic_mask().values)             # (depth, lat, lon) bool
     with xr.open_dataset(path, decode_times=False) as ds:
-        s = ds["s"].isel(depth=slice(0, ndep))                    # (time, nd, lat, lon)
-        zonav = (s.where(mask).mean(dim="lon")                    # Atlantic zonal mean
-                   .transpose("time", "depth", "lat").values.astype(np.float64))
+        depth = ds["depth"].values.astype(np.float64)
         lat = ds["lat"].values.astype(np.float64)
-        depth = ds["depth"].isel(depth=slice(0, ndep)).values.astype(np.float64)
+        ntime = ds.dims["time"]
+        svar = ds["s"]
+        zonav = np.empty((ntime, len(depth), len(lat)), dtype=np.float64)
+        chunk = 200
+        for t0 in range(0, ntime, chunk):
+            t1 = min(t0 + chunk, ntime)
+            block = svar.isel(time=slice(t0, t1)).values      # (nt, depth, lat, lon)
+            block = np.where(mask[None, :, :, :], block, np.nan)
+            with warnings.catch_warnings():                    # all-land lats -> NaN
+                warnings.simplefilter("ignore", category=RuntimeWarning)
+                zonav[t0:t1] = np.nanmean(block, axis=3)       # Atlantic zonal mean
     return box_means(zonav, lat, depth)
-
-
-def _top_depth_flag() -> np.ndarray:
-    """Boolean flag for depth levels used by the boxes, read from any equilibrium
-    grid (depth centres are grid constants, so use the mask's depth axis)."""
-    depth = atlantic_mask()["depth"].values
-    return depth <= BOX_DEPTH_MAX
 
 
 def build_equilibrium_dataset(means: dict[str, np.ndarray], co2: str,
@@ -294,7 +324,7 @@ def build_equilibrium_dataset(means: dict[str, np.ndarray], co2: str,
             ("time",), means[name],
             {"long_name": box["long_name"], "units": "g/kg",
              "box_lat_min": box["lat_min"], "box_lat_max": box["lat_max"],
-             "box_depth_max": BOX_DEPTH_MAX},
+             "box_depth_max": _depth_attr(box)},
         )
     return xr.Dataset(
         data_vars,
@@ -306,8 +336,8 @@ def build_equilibrium_dataset(means: dict[str, np.ndarray], co2: str,
             "source": "Data repository: https://doi.org/10.5281/zenodo.17053348",
             "processing": "compute_box_salinity.py — Atlantic zonal mean (PlaRegion "
                           "Atlantic3D, southern border -34) then volume-weighted "
-                          "(cos(lat) x layer thickness) box mean, top "
-                          f"{BOX_DEPTH_MAX:.0f} m, land cells excluded.",
+                          "(cos(lat) x layer thickness) box mean over each box's depth "
+                          "range (see per-variable box_depth_max), land cells excluded.",
             "co2_level": co2,
             "state": {"on": "AMOC-on", "of": "AMOC-off", "ed": "edge (saddle)"}[state],
             "source_file": src_file,

@@ -34,11 +34,11 @@ PLOTS_DIR  = PLASIM_DIR / "plots"
 
 # ---------------------------------------------------------------------------
 # Dataset selection (must match plasim_export_paper_data.jl)
-#   "eof"     — EOF-reduced coordinates (redu1/2/3); CSVs in data/plasim/paper
-#   "boxsalt" — box-mean salinities (salt_na, salt_trop); CSVs in
-#               data/plasim/paper_boxsalt (see scripts/compute_box_salinity.py)
+#   "eof"          — EOF-reduced coordinates (redu1/2/3); CSVs in data/plasim/paper
+#   "boxsalt"      — box-mean salinities (salt_na, salt_trop); CSVs in paper_boxsalt
+#   "boxsalt_deep" — deep box salinities (salt_na_deep, salt_trop_deep); paper_boxsalt_deep
 # ---------------------------------------------------------------------------
-MODE = "boxsalt"
+MODE = "boxsalt_deep"
 
 DATASET_CONFIGS = {
     "eof": dict(
@@ -50,6 +50,11 @@ DATASET_CONFIGS = {
         paper_subdir="paper_boxsalt",
         axis_labels=("North Atlantic salinity (psu)", "Tropical salinity (psu)"),
         out_suffix="_boxsalt",
+    ),
+    "boxsalt_deep": dict(   # deep-box configuration: NA full column, Tropical 0-500 m
+        paper_subdir="paper_boxsalt_deep",
+        axis_labels=("North Atlantic salinity (psu, 0-1000 m)", "Tropical salinity (psu, 0-500 m)"),
+        out_suffix="_boxsalt_deep",
     ),
 }
 CFG        = DATASET_CONFIGS[MODE]
