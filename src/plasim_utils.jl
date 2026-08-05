@@ -6,7 +6,7 @@ Utilities for loading and analyzing PlaSim edge-state trajectory data.
 PlaSim (Planet Simulator) is a general circulation model. The edge-state
 (saddle) trajectories are computed by bisecting between initial conditions
 that converge to AMOC-on vs. AMOC-off attractors. The data is stored as
-NetCDF files with EOF-reduced dimensions (redu1, redu2, redu3).
+NetCDF files containing box-mean salinity time series.
 
 Each NetCDF file contains 2 trajectories (tracks), one converging to AMOC-on
 and one to AMOC-off.
@@ -28,6 +28,59 @@ using NCDatasets
 using DataFrames
 using Statistics
 using LinearAlgebra
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AMOC-strength sidecar helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+"""
+    amoc_strength_key(source_filepath) → String
+
+Return the variable name used in `data/custom_readouts/amoc_strength_timeseries.nc` for
+the AMOC-strength series extracted from `source_filepath`.
+"""
+amoc_strength_key(source_filepath::AbstractString) =
+    replace(basename(source_filepath), r"\.etc\.nc$" => "")
+
+"""
+    load_amoc_strength_series(amoc_file, source_filepath; track_id=nothing)
+
+Load AMOC strength from the standalone sidecar NetCDF file created by
+`scripts/extract_amoc_strength.jl`.
+
+Equilibrium source files return a one-dimensional vector. Edge-track source
+files return either the full `(time, track)` matrix when `track_id === nothing`
+or the requested one-dimensional track when `track_id` is supplied.
+"""
+function load_amoc_strength_series(
+    amoc_file::AbstractString,
+    source_filepath::AbstractString;
+    track_id::Union{Nothing, Int} = nothing,
+)
+    isfile(amoc_file) || return nothing
+    key = amoc_strength_key(source_filepath)
+
+    try
+        NCDataset(amoc_file, "r") do ds
+            haskey(ds, key) || return nothing
+            source_var = ds[key]
+            n_dims = length(dimnames(source_var))
+
+            if n_dims == 1
+                return Float64.(coalesce.(source_var[:], NaN))
+            elseif n_dims == 2
+                data = Float64.(coalesce.(source_var[:, :], NaN))
+                track_id === nothing && return data
+                1 <= track_id <= size(data, 2) || return nothing
+                return data[:, track_id]
+            else
+                return nothing
+            end
+        end
+    catch
+        return nothing
+    end
+end
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Gaussian-ellipse helpers
@@ -86,7 +139,7 @@ bisection trajectories.
 # Arguments
 - `filepath`:       full path to the NetCDF file
 - `variable_names`: variable names to read (same order as used elsewhere, e.g.
-                    `["redu1", "redu2", "redu3"]`)
+                    `["salt_na", "salt_trop"]`)
 
 # Returns
 `Vector{Float64}` of length `length(variable_names)` with the time-mean state.
@@ -108,7 +161,7 @@ end
         co2_label::String,
         data_dir::String,
         n_files::Int,
-        variable_names::Vector{String} = ["redu1", "redu2", "redu3"],
+        variable_names::Vector{String} = ["salt_na", "salt_trop"],
         file_pattern::Function = i -> "plasimelancholia_\$(co2_label)_edgetrack_iter\$(i).etc.nc"
     ) → DataFrame
 
@@ -120,16 +173,15 @@ variables from each file and concatenates them. The resulting DataFrame has colu
 - `file_id::Int`         — which file (1-indexed)
 - `track_id::Int`        — which track within the file (1 or 2)
 - `time::Float64`        — time step index (1-based)
-- `x1::Float64`          — first EOF component (redu1)
-- `x2::Float64`          — second EOF component (redu2)
-- `x3::Float64`          — third EOF component (redu3)  [if present]
+- `x1::Float64`          — first selected coordinate
+- `x2::Float64`          — second selected coordinate
 - (additional xi columns for each variable)
 
 # Arguments
 - `co2_label`: string label used in file names, e.g. `"360ppm"` or `"720ppm"`
 - `data_dir`:  directory containing the NetCDF files
 - `n_files`:   number of files to attempt loading (files that don't exist are skipped)
-- `variable_names`: names of NetCDF variables to read (default: redu1, redu2, redu3)
+- `variable_names`: names of NetCDF variables to read
 - `file_pattern`: function `i -> filename` mapping file index to filename
 
 # Returns
@@ -139,7 +191,7 @@ function load_plasim_trajectories(;
     co2_label::String,
     data_dir::String,
     n_files::Int,
-    variable_names::Vector{String} = ["redu1", "redu2", "redu3"],
+    variable_names::Vector{String} = ["salt_na", "salt_trop"],
     file_pattern::Function = i -> "plasimelancholia_$(co2_label)_edgetrack_iter$(i).etc.nc"
 )
     n_dims = length(variable_names)
@@ -238,7 +290,7 @@ function _get_final_states(df::DataFrame, n_dims::Int; final_fraction::Float64 =
     for (j, tid) in enumerate(ids)
         traj = filter(r -> r.trajectory_id == tid, df)
         sort!(traj, :time)
-        # Drop rows where any EOF dimension is NaN (NetCDF fill values)
+        # Drop rows where any selected coordinate is NaN (NetCDF fill values)
         valid_mask = [!any(isnan(traj[t, Symbol("x$k")]) for k in 1:n_dims) for t in 1:nrow(traj)]
         traj = traj[valid_mask, :]
         n_pts = nrow(traj)
@@ -256,23 +308,21 @@ end
     classify_trajectories(df, n_dims; final_fraction=0.1) → Vector{Int}
 
 Classify each trajectory as ending at the AMOC-on (label=1) or AMOC-off
-(label=2) attractor, based on the first reduced coordinate (x1).
+(label=2) attractor, based on the first selected coordinate (x1).
 
-By default (`on_is_low = true`) the AMOC-on state has the *lower* value of x1,
-as for the EOF coordinate `redu1` (meridional salinity gradient).  For the
-box-mean reduction the first coordinate is the North Atlantic box salinity,
-which is *higher* for AMOC-on; pass `on_is_low = false` in that case.  We split
-by the median of final x1 values.
+For the box-salinity reductions the first coordinate is North Atlantic salinity,
+which is higher for AMOC-on, so `on_is_low` defaults to `false`. We split by the
+median of final x1 values.
 
 Returns a vector of length `n_trajectories` with values 1 (AMOC-on) or 2
 (AMOC-off), in the same order as `sort(unique(df.trajectory_id))`.
 """
 function classify_trajectories(df::DataFrame, n_dims::Int;
                                 final_fraction::Float64 = 0.1,
-                                on_is_low::Bool = true)
+                                on_is_low::Bool = false)
     ids, final_states = _get_final_states(df, n_dims; final_fraction)
 
-    # Use the first reduced coordinate (x1) to separate AMOC-on from AMOC-off.
+    # Use the first selected coordinate (x1) to separate AMOC-on from AMOC-off.
     x1_vals   = final_states[:, 1]
     threshold = median(x1_vals)
 
@@ -294,7 +344,7 @@ end
 Estimate the positions of the AMOC-on and AMOC-off attractors by averaging
 the final states of trajectories that converge to each one.
 
-The split between on/off is done by the median of final redu1 values (first EOF).
+The split between on/off is done by the median of final x1 values.
 
 Returns a Dict:
 - `1 => mean_state_on`   (AMOC-on attractor, length n_dims)
@@ -302,7 +352,7 @@ Returns a Dict:
 """
 function estimate_attractors(df::DataFrame, n_dims::Int;
                               final_fraction::Float64 = 0.1,
-                              on_is_low::Bool = true)
+                              on_is_low::Bool = false)
     ids, final_states = _get_final_states(df, n_dims; final_fraction)
     labels = classify_trajectories(df, n_dims; final_fraction, on_is_low)
 
@@ -636,15 +686,15 @@ second-order statistics.
 
 # Measures returned
 - `mean_state::Vector{Float64}`         — time-mean position (attractor estimate)
-- `std_per_dim::Vector{Float64}`        — standard deviation along each EOF axis
+- `std_per_dim::Vector{Float64}`        — standard deviation along each coordinate
 - `total_variance::Float64`             — trace of the covariance matrix
 - `dominant_variance::Float64`          — largest eigenvalue of the covariance matrix
                                           (variance in the most variable direction)
 - `dominant_direction::Vector{Float64}` — corresponding eigenvector
 - `mean_dist::Float64`                  — mean Euclidean distance from the attractor mean
-- `lag1_autocorr::Vector{Float64}`      — lag-1 autocorrelation per EOF dimension
+- `lag1_autocorr::Vector{Float64}`      — lag-1 autocorrelation per coordinate
                                           (classical CSD indicator; → 1 near tipping)
-- `ac_times::Vector{Float64}`           — integrated autocorrelation time per EOF dim (yr)
+- `ac_times::Vector{Float64}`           — integrated autocorrelation time per coordinate (yr)
 - `mean_lag1_autocorr::Float64`         — mean lag-1 autocorrelation across dims
 - `mean_ac_time::Float64`               — mean integrated autocorrelation time (yr)
 - `n_samples::Int`                      — number of valid (non-NaN) time steps used

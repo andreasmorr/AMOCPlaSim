@@ -2,10 +2,10 @@
 plotting_paper.py  –  AMOCPlaSim 4-panel paper figure.
 
 Reads CSV files exported by plasim_export_paper_data.jl:
-  data/plasim/paper/trajectories_{285ppm,360ppm}.csv
-  data/plasim/paper/equilibria_{285ppm,360ppm}.csv
-  data/plasim/paper/ellipses_{285ppm,360ppm}.csv
-  data/plasim/paper/state_means_{285ppm,360ppm}.csv
+  data/results/paper/trajectories_{285ppm,360ppm}.csv
+  data/results/paper/equilibria_{285ppm,360ppm}.csv
+  data/results/paper/ellipses_{285ppm,360ppm}.csv
+  data/results/paper/state_means_{285ppm,360ppm}.csv
 
 Output: plots/plasim_paper.png
 
@@ -33,34 +33,11 @@ UMBRELLA   = PLASIM_DIR.parent                        # AMOCResilience/
 PLOTS_DIR  = PLASIM_DIR / "plots"
 
 # ---------------------------------------------------------------------------
-# Dataset selection (must match plasim_export_paper_data.jl)
-#   "eof"          — EOF-reduced coordinates (redu1/2/3); CSVs in data/plasim/paper
-#   "boxsalt"      — box-mean salinities (salt_na, salt_trop); CSVs in paper_boxsalt
-#   "boxsalt_deep" — deep box salinities (salt_na_deep, salt_trop_deep); paper_boxsalt_deep
+# Paper-data paths and labels
 # ---------------------------------------------------------------------------
-MODE = "boxsalt_deep"
-
-DATASET_CONFIGS = {
-    "eof": dict(
-        paper_subdir="paper",
-        axis_labels=("EOF 1", "EOF 2"),
-        out_suffix="",
-    ),
-    "boxsalt": dict(
-        paper_subdir="paper_boxsalt",
-        axis_labels=("North Atlantic salinity (psu)", "Tropical salinity (psu)"),
-        out_suffix="_boxsalt",
-    ),
-    "boxsalt_deep": dict(   # deep-box configuration: NA full column, Tropical 0-500 m
-        paper_subdir="paper_boxsalt_deep",
-        axis_labels=("North Atlantic salinity (psu, 0-1000 m)", "Tropical salinity (psu, 0-500 m)"),
-        out_suffix="_boxsalt_deep",
-    ),
-}
-CFG        = DATASET_CONFIGS[MODE]
-AXIS_X, AXIS_Y = CFG["axis_labels"]
-OUT_SUFFIX = CFG["out_suffix"]
-DATA_DIR   = PLASIM_DIR / "data" / "plasim" / CFG["paper_subdir"]
+AXIS_X = "North Atlantic salinity (psu, 0-1000 m)"
+AXIS_Y = "Tropical salinity (psu, 0-500 m)"
+DATA_DIR = PLASIM_DIR / "data" / "results" / "paper"
 
 sys.path.insert(0, str(UMBRELLA))
 from amoc_plot_style import (
@@ -170,10 +147,8 @@ def main() -> None:
                         fontsize=8, color="gray")
 
         # Reference lines from equilibrium data: the settled equilibrium AMOC
-        # strength (mean of the last valid steps).  Drop NaNs first — the box
-        # equilibrium runs can be longer than the EOF files the AMOC is read
-        # from (e.g. 360 ppm: 2000 vs 1800 steps), leaving a trailing NaN tail
-        # that would otherwise make the last-100 mean NaN and hide the line.
+        # strength (mean of the last valid steps). Drop NaNs first because the
+        # salinity and AMOC sidecar time series can have different lengths.
         for state, color in [("on", COL_ON), ("off", COL_OFF)]:
             sub = df_equil[df_equil["state"] == state]["amoc_strength"].dropna()
             if not sub.empty:
@@ -188,7 +163,7 @@ def main() -> None:
         ax_top.set_xlabel("Time (model years)")
         add_panel_label(ax_top, panel_labels[col])
 
-        # ── BOTTOM panel: EOF1 vs EOF2 phase portrait ─────────────────────────
+        # ── BOTTOM panel: salinity-coordinate phase portrait ──────────────────
         # 1. Gaussian ellipses (thick dashed)
         for state_name, color in [
             ("on",   COL_ON  ),
@@ -228,7 +203,7 @@ def main() -> None:
     for ax in axes_top:
         ax.set_xlim(x_lo, x_hi)
 
-    out_path = PLOTS_DIR / f"plasim_paper{OUT_SUFFIX}.png"
+    out_path = PLOTS_DIR / "plasim_paper.png"
     fig.savefig(out_path, dpi=200, bbox_inches="tight")
     print(f"Figure saved: {out_path}")
     plt.close(fig)

@@ -1,8 +1,8 @@
 """
     plasim_edge_analysis.jl
 
-Analyze PlaSim high-dimensional edge-state trajectories for current (360 ppm)
-and preindustrial (285 ppm) CO2.
+Analyze PlaSim box-salinity edge-state trajectories for current (360 ppm) and
+preindustrial (285 ppm) CO2.
 
 For each CO2 level the script:
   1. Loads all NetCDF edge-track files into a DataFrame.
@@ -11,14 +11,14 @@ For each CO2 level the script:
   4. Loads the edge-state position from the converged `_ed.etc.nc` file.
   5. Computes convergence times and edge-to-attractor distances.
   6. Produces three figures:
-       Fig 1 — Scatter in (EOF1, EOF2) space, colored by label, edge marked
+       Fig 1 — Scatter in the selected two-dimensional salinity space
        Fig 2 — Bar chart of mean convergence times (on vs off, CO2 comparison)
        Fig 3 — Bar chart of mean edge-to-attractor distances
 
 Run from the project root:
     julia --project scripts/plasim_edge_analysis.jl
 
-Edit the DATA_DIR and N_FILES_* constants below to point to your NetCDF data.
+Edit the N_FILES_* constants below if the available edge-track files change.
 """
 
 using DrWatson
@@ -33,56 +33,24 @@ using LinearAlgebra
 using CSV
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Configuration — adjust paths and counts to your data layout
+# Configuration
 # ─────────────────────────────────────────────────────────────────────────────
 
-# ── Dataset selection ─────────────────────────────────────────────────────────
-# Choose which reduced state-space representation to analyse:
-#   :eof     — Börner EOF-reduced coordinates (redu1/2/3) in data/plasim
-#   :boxsalt — box-mean salinities (salt_na, salt_trop, 0-100 m) in
-#              data/plasim_boxsalt, produced by scripts/compute_box_salinity.py.
-#   :boxsalt_deep — deep box-mean salinities (salt_na_deep = full column,
-#              salt_trop_deep = 0-500 m) from the same files.
-# The box-salinity modes are 2-D reductions (the Southern box has no Atlantic
-# data), so the 3-D scatter figures are skipped and outputs get a mode suffix.
-const MODE = :boxsalt_deep
+# Directory containing the generated PlaSim box-salinity NetCDF files.
+const DATA_DIR = datadir("custom_readouts")
 
-const DATASET_CONFIGS = Dict(
-    :eof => (
-        data_dir    = datadir("plasim"),
-        variables   = ["redu1", "redu2", "redu3"],
-        axis_labels = ["EOF 1", "EOF 2", "EOF 3"],
-        on_is_low   = true,    # AMOC-on has the lower redu1 (meridional S gradient)
-        out_suffix  = "",
-    ),
-    :boxsalt => (
-        data_dir    = datadir("plasim_boxsalt"),
-        variables   = ["salt_na", "salt_trop"],
-        axis_labels = ["North Atlantic salinity (psu)", "Tropical salinity (psu)", ""],
-        on_is_low   = false,   # AMOC-on has the higher North Atlantic box salinity
-        out_suffix  = "_boxsalt",
-    ),
-    :boxsalt_deep => (   # deep-box configuration: NA full column, Tropical 0-500 m
-        data_dir    = datadir("plasim_boxsalt"),
-        variables   = ["salt_na_deep", "salt_trop_deep"],
-        axis_labels = ["North Atlantic salinity (psu, 0-1000 m)", "Tropical salinity (psu, 0-500 m)", ""],
-        on_is_low   = false,
-        out_suffix  = "_boxsalt_deep",
-    ),
-)
-const CFG         = DATASET_CONFIGS[MODE]
-const AXIS_LABELS = CFG.axis_labels
-const ON_IS_LOW   = CFG.on_is_low
-const OUT_SUFFIX  = CFG.out_suffix
+# The remaining paper-facing coordinates are deep-box salinities:
+# salt_na   = North Atlantic, 35N-80N, 0-1000 m
+# salt_trop = Tropical Atlantic, 35S-35N, 0-500 m
+const VARIABLE_NAMES = ["salt_na", "salt_trop"]
+const AXIS_LABELS = ["North Atlantic salinity (psu, 0-1000 m)",
+                     "Tropical salinity (psu, 0-500 m)",
+                     ""]
+const ON_IS_LOW = false   # AMOC-on has the higher North Atlantic box salinity
 
-# Directory containing the PlaSim NetCDF files
-const DATA_DIR = CFG.data_dir
-
-# AMOC strength (a physical, reduction-independent diagnostic) is not stored in
-# the box-salinity files, so it is always read from the EOF dataset directory,
-# where the equilibrium and edge-track files carry the `amoc_strength` variable
-# under the same filenames.
-const AMOC_DIR = DATASET_CONFIGS[:eof].data_dir
+# AMOC strength (a physical, reduction-independent diagnostic) is stored in the
+# compact sidecar produced by scripts/extract_amoc_strength.jl.
+const AMOC_STRENGTH_FILE = datadir("custom_readouts", "amoc_strength_timeseries.nc")
 
 # CO2 level labels (used in filenames)
 const CO2_LABEL_CURRENT  = "360ppm"
@@ -92,11 +60,9 @@ const CO2_LABEL_PREINDUSTRIAL = "285ppm"
 const N_FILES_360 = 38
 const N_FILES_285 = 37
 
-# Reduced-state coordinates to read from each file (set by MODE above)
-const VARIABLE_NAMES = CFG.variables
 const N_DIMS = length(VARIABLE_NAMES)
 
-# Convergence thresholds in EOF units — separate for each attractor (adjust if needed)
+# Convergence thresholds in the selected salinity-coordinate units.
 const EPSILON_ON  = 0.1   # threshold for AMOC-on trajectories
 const EPSILON_OFF = 0.2   # threshold for AMOC-off trajectories
 
@@ -278,7 +244,7 @@ ids_285 = summary_285.trajectory_ids
 ids_360 = summary_360.trajectory_ids
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Figure 1: Trajectory scatter in (EOF1, EOF2) space
+# Figure 1: Trajectory scatter in selected salinity-coordinate space
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Build per-trajectory time series for plotting
@@ -287,29 +253,8 @@ function traj_x1x2(df::DataFrame, tid::Int)
     return sub.x1, sub.x2
 end
 
-function traj_x1x2x3(df::DataFrame, tid::Int)
-    sub = sort(filter(r -> r.trajectory_id == tid, df), :time)
-    return sub.x1, sub.x2, sub.x3
-end
-
 # Return a Bool mask selecting rows of a time-series matrix that have no NaN
 valid_rows(ts::Matrix) = [!any(isnan, ts[t, :]) for t in axes(ts, 1)]
-
-# Return (x, y) points tracing a circle of given radius around (cx, cy)
-function circle_points(cx, cy, r; n = 120)
-    θ = LinRange(0, 2π, n + 1)
-    return cx .+ r .* cos.(θ), cy .+ r .* sin.(θ)
-end
-
-# Return (X, Y, Z) surface matrices for a sphere of radius r centered at (cx, cy, cz)
-function sphere_surface(cx, cy, cz, r; n = 40)
-    θ = LinRange(0,  π, n)   # polar
-    φ = LinRange(0, 2π, n)   # azimuthal
-    X = [cx + r * sin(t) * cos(p) for t in θ, p in φ]
-    Y = [cy + r * sin(t) * sin(p) for t in θ, p in φ]
-    Z = [cz + r * cos(t)          for t in θ, p in φ]
-    return X, Y, Z
-end
 
 # Return (x, y) points tracing the n-sigma contour of a 2D Gaussian fitted to ts[:,dim1] and ts[:,dim2]
 function gaussian_ellipse_points(ts::Matrix, dim1::Int = 1, dim2::Int = 2; n = 120, sigma = 1)
@@ -323,27 +268,6 @@ function gaussian_ellipse_points(ts::Matrix, dim1::Int = 1, dim2::Int = 2; n = 1
     # unit circle scaled by sigma * sqrt(eigenvalues), then rotated to data frame
     pts   = vecs * (sigma .* sqrt.(vals) .* [cos.(θ)'; sin.(θ)'])
     return μ[1] .+ pts[1, :], μ[2] .+ pts[2, :]
-end
-
-# Return (X, Y, Z) surface matrices for the n-sigma ellipsoid of a 3D Gaussian fitted to ts[:,1:3]
-function gaussian_ellipsoid_surface(ts::Matrix; n = 40, sigma = 1)
-    valid = [!any(isnan, ts[t, :]) for t in axes(ts, 1)]
-    data  = ts[valid, 1:3]
-    μ     = vec(mean(data, dims = 1))
-    C     = cov(data)
-    vals, vecs = eigen(Symmetric(C))
-    vals  = max.(vals, 0.0)
-    sv    = sigma .* sqrt.(vals)
-    θ = LinRange(0,  π, n)   # polar
-    φ = LinRange(0, 2π, n)   # azimuthal
-    X = zeros(n, n); Y = zeros(n, n); Z = zeros(n, n)
-    for i in 1:n, j in 1:n
-        v = vecs * (sv .* [sin(θ[i]) * cos(φ[j]), sin(θ[i]) * sin(φ[j]), cos(θ[i])])
-        X[i, j] = μ[1] + v[1]
-        Y[i, j] = μ[2] + v[2]
-        Z[i, j] = μ[3] + v[3]
-    end
-    return X, Y, Z
 end
 
 
@@ -415,83 +339,12 @@ Legend(fig1[1, 3],
     labelsize = 11,
 )
 
-fig1_path = plotsdir("plasim_trajectories_scatter$(OUT_SUFFIX).png")
+fig1_path = plotsdir("plasim_trajectories_scatter.png")
 wsave(fig1_path, fig1)
 @info "Figure 1 saved to: $fig1_path"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Figure 1b: Trajectory scatter in full (EOF1, EOF2, EOF3) space
-# Only meaningful for a ≥3-D reduction (skipped for the 2-D box-salinity mode).
-# ─────────────────────────────────────────────────────────────────────────────
-
-if N_DIMS >= 3
-
-fig1b = Figure(size = (1400, 700))
-
-for (col_idx, (label, df_plot, summary, edge_st, ids, ts_on, ts_off, ts_ed)) in enumerate([
-    ("285 ppm (pre-industrial)", df_285, summary_285, edge_285, ids_285, ts_on_285, ts_off_285, ts_ed_285),
-    ("360 ppm (current CO₂)",   df_360, summary_360, edge_360, ids_360, ts_on_360, ts_off_360, ts_ed_360),
-])
-    ax3d = Axis3(fig1b[1, col_idx];
-        xlabel    = "EOF 1",
-        ylabel    = "EOF 2",
-        zlabel    = "EOF 3",
-        title     = label,
-        titlesize = 13,
-    )
-
-    # Plot each trajectory — solid for converged, dashed+faint for unconverged
-    for (j, tid) in enumerate(ids)
-        lbl      = summary.attractor_labels[j]
-        c        = lbl == 1 ? col_on : col_off
-        did_conv = summary.converged[tid]
-        x1, x2, x3 = traj_x1x2x3(df_plot, tid)
-        if did_conv
-            lines!(ax3d, x1, x2, x3; color = (c, 0.6), linewidth = 1.2, linestyle = :solid)
-        else
-            lines!(ax3d, x1, x2, x3; color = (c, 0.2), linewidth = 0.7, linestyle = :dash)
-        end
-    end
-
-    att_on  = summary.attractors[1]
-    att_off = summary.attractors[2]
-    scatter!(ax3d, [att_on[1]],  [att_on[2]],  [att_on[3]];
-             color = col_on,  marker = :star5, markersize = 18, label = "AMOC-on attractor")
-    scatter!(ax3d, [att_off[1]], [att_off[2]], [att_off[3]];
-             color = col_off, marker = :star5, markersize = 18, label = "AMOC-off attractor")
-    scatter!(ax3d, [edge_st[1]], [edge_st[2]], [edge_st[3]];
-             color = col_edge, marker = :diamond, markersize = 14, label = "Edge state")
-
-    # 1σ Gaussian ellipsoids for each state
-    Xon, Yon, Zon = gaussian_ellipsoid_surface(ts_on;  sigma = ELLIPSE_SIGMA)
-    surface!(ax3d, Xon, Yon, Zon; color = (col_on,  0.12), shading = NoShading)
-    Xof, Yof, Zof = gaussian_ellipsoid_surface(ts_off; sigma = ELLIPSE_SIGMA)
-    surface!(ax3d, Xof, Yof, Zof; color = (col_off, 0.12), shading = NoShading)
-    Xed, Yed, Zed = gaussian_ellipsoid_surface(ts_ed;  sigma = ELLIPSE_SIGMA)
-    surface!(ax3d, Xed, Yed, Zed; color = (col_edge, 0.12), shading = NoShading)
-
-    axislegend(ax3d; position = :rt, labelsize = 10)
-end
-
-Legend(fig1b[1, 3],
-    [
-        LineElement(color = col_on,  linestyle = :solid, linewidth = 1.2),
-        LineElement(color = col_off, linestyle = :solid, linewidth = 1.2),
-        LineElement(color = :gray40, linestyle = :dash,  linewidth = 0.7),
-    ],
-    ["AMOC-on (converged)", "AMOC-off (converged)", "Not converged"],
-    "Trajectory type",
-    labelsize = 11,
-)
-
-fig1b_path = plotsdir("plasim_trajectories_scatter_3d$(OUT_SUFFIX).png")
-wsave(fig1b_path, fig1b)
-@info "Figure 1b saved to: $fig1b_path"
-
-end  # if N_DIMS >= 3  (Figure 1b)
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Figure 1c: Equilibrium runs in (EOF1, EOF2) space
+# Figure 1c: Equilibrium runs in selected salinity-coordinate space
 # ─────────────────────────────────────────────────────────────────────────────
 
 fig1c = Figure(size = (1400, 600))
@@ -550,76 +403,9 @@ Legend(fig1c[1, 3],
     labelsize = 11,
 )
 
-fig1c_path = plotsdir("plasim_equilibrium_scatter$(OUT_SUFFIX).png")
+fig1c_path = plotsdir("plasim_equilibrium_scatter.png")
 wsave(fig1c_path, fig1c)
 @info "Figure 1c saved to: $fig1c_path"
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Figure 1d: Equilibrium runs in (EOF1, EOF2, EOF3) space
-# Only meaningful for a ≥3-D reduction (skipped for the 2-D box-salinity mode).
-# ─────────────────────────────────────────────────────────────────────────────
-
-if N_DIMS >= 3
-
-fig1d = Figure(size = (1400, 700))
-
-for (col_idx, (label, ts_on, ts_off, ts_ed, summary, edge_st)) in enumerate([
-    ("285 ppm (pre-industrial)", ts_on_285, ts_off_285, ts_ed_285, summary_285, edge_285),
-    ("360 ppm (current CO₂)",   ts_on_360, ts_off_360, ts_ed_360, summary_360, edge_360),
-])
-    ax3d = Axis3(fig1d[1, col_idx];
-        xlabel    = "EOF 1",
-        ylabel    = "EOF 2",
-        zlabel    = "EOF 3",
-        title     = label,
-        titlesize = 13,
-    )
-
-    vm_on  = valid_rows(ts_on)
-    vm_off = valid_rows(ts_off)
-    vm_ed  = valid_rows(ts_ed)
-    lines!(ax3d, ts_on[vm_on, 1],  ts_on[vm_on, 2],  ts_on[vm_on, 3];
-           color = (col_on,  0.7), linewidth = 1.2, linestyle = :solid, label = "AMOC-on eq. run")
-    lines!(ax3d, ts_off[vm_off, 1], ts_off[vm_off, 2], ts_off[vm_off, 3];
-           color = (col_off, 0.7), linewidth = 1.2, linestyle = :solid, label = "AMOC-off eq. run")
-    lines!(ax3d, ts_ed[vm_ed, 1],  ts_ed[vm_ed, 2],   ts_ed[vm_ed, 3];
-           color = (col_edge, 0.6), linewidth = 1.0, linestyle = :solid, label = "Edge eq. run")
-
-    att_on  = summary.attractors[1]
-    att_off = summary.attractors[2]
-    scatter!(ax3d, [att_on[1]],  [att_on[2]],  [att_on[3]];
-             color = col_on,  marker = :star5, markersize = 18, label = "AMOC-on attractor")
-    scatter!(ax3d, [att_off[1]], [att_off[2]], [att_off[3]];
-             color = col_off, marker = :star5, markersize = 18, label = "AMOC-off attractor")
-    scatter!(ax3d, [edge_st[1]], [edge_st[2]], [edge_st[3]];
-             color = col_edge, marker = :diamond, markersize = 14, label = "Edge state")
-
-    Xon, Yon, Zon = gaussian_ellipsoid_surface(ts_on;  sigma = ELLIPSE_SIGMA)
-    surface!(ax3d, Xon, Yon, Zon; color = (col_on,  0.12), shading = NoShading)
-    Xof, Yof, Zof = gaussian_ellipsoid_surface(ts_off; sigma = ELLIPSE_SIGMA)
-    surface!(ax3d, Xof, Yof, Zof; color = (col_off, 0.12), shading = NoShading)
-    Xed, Yed, Zed = gaussian_ellipsoid_surface(ts_ed;  sigma = ELLIPSE_SIGMA)
-    surface!(ax3d, Xed, Yed, Zed; color = (col_edge, 0.12), shading = NoShading)
-
-    axislegend(ax3d; position = :rt, labelsize = 10)
-end
-
-Legend(fig1d[1, 3],
-    [
-        LineElement(color = col_on,   linestyle = :solid, linewidth = 1.2),
-        LineElement(color = col_off,  linestyle = :solid, linewidth = 1.2),
-        LineElement(color = col_edge, linestyle = :solid, linewidth = 1.0),
-    ],
-    ["AMOC-on eq. run", "AMOC-off eq. run", "Edge eq. run"],
-    "Equilibrium run",
-    labelsize = 11,
-)
-
-fig1d_path = plotsdir("plasim_equilibrium_scatter_3d$(OUT_SUFFIX).png")
-wsave(fig1d_path, fig1d)
-@info "Figure 1d saved to: $fig1d_path"
-
-end  # if N_DIMS >= 3  (Figure 1d)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Figure 2: Bar chart — mean convergence times
@@ -659,7 +445,7 @@ Legend(fig2[1, 2],
     "CO₂ level",
 )
 
-fig2_path = plotsdir("plasim_convergence_times_bar$(OUT_SUFFIX).png")
+fig2_path = plotsdir("plasim_convergence_times_bar.png")
 wsave(fig2_path, fig2)
 @info "Figure 2 saved to: $fig2_path"
 
@@ -670,7 +456,7 @@ wsave(fig2_path, fig2)
 fig3 = Figure(size = (700, 500))
 ax3  = Axis(fig3[1, 1];
     xlabel    = "",
-    ylabel    = "Mean edge→attractor distance (EOF units)",
+    ylabel    = "Mean edge→attractor distance (psu)",
     title     = "Edge-state distance to attractor by CO₂ level",
     titlesize = 14,
 )
@@ -695,7 +481,7 @@ Legend(fig3[1, 2],
     "CO₂ level",
 )
 
-fig3_path = plotsdir("plasim_edge_distances_bar$(OUT_SUFFIX).png")
+fig3_path = plotsdir("plasim_edge_distances_bar.png")
 wsave(fig3_path, fig3)
 @info "Figure 3 saved to: $fig3_path"
 
@@ -708,33 +494,30 @@ results_to_save = Dict(
     "summary_285" => summary_285,
 )
 
-wsave(datadir("plasim", "resilience_summaries$(OUT_SUFFIX).jld2"), results_to_save)
-@info "Results saved to: $(datadir("plasim", "resilience_summaries$(OUT_SUFFIX).jld2"))"
+wsave(datadir("results", "resilience_summaries.jld2"), results_to_save)
+@info "Results saved to: $(datadir("results", "resilience_summaries.jld2"))"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Save key metrics to CSV
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Size of the 1σ ellipsoid: (4π/3)·√det(C) in 3-D, π·√det(C) (ellipse area) in 2-D.
+# Size of the 1σ Gaussian ellipse in the selected salinity-coordinate plane.
 function ellipsoid_volume(C::Matrix)
-    d = size(C, 1)
-    return d >= 3 ? (4π / 3) * sqrt(det(Symmetric(C[1:3, 1:3]))) :
-                    π * sqrt(det(Symmetric(C)))
+    return π * sqrt(det(Symmetric(C)))
 end
 
-# Mean AMOC strength from an equilibrium NetCDF file (NaN if not stored, as is
-# the case for the box-salinity files which carry no amoc_strength variable).
-function mean_amoc_strength(filepath::String)
-    NCDataset(filepath, "r") do ds
-        haskey(ds, "amoc_strength") || return NaN
-        mean(skipmissing(ds["amoc_strength"][:]))
-    end
+# Mean AMOC strength from the standalone sidecar file.
+function mean_amoc_strength(source_filename::String)
+    data = load_amoc_strength_series(AMOC_STRENGTH_FILE, source_filename)
+    data === nothing && return NaN
+    valid = filter(!isnan, data)
+    isempty(valid) ? NaN : mean(valid)
 end
 
-amoc_on_285  = mean_amoc_strength(joinpath(AMOC_DIR, "plasimelancholia_$(CO2_LABEL_PREINDUSTRIAL)_on.etc.nc"))
-amoc_off_285 = mean_amoc_strength(joinpath(AMOC_DIR, "plasimelancholia_$(CO2_LABEL_PREINDUSTRIAL)_of.etc.nc"))
-amoc_on_360  = mean_amoc_strength(joinpath(AMOC_DIR, "plasimelancholia_$(CO2_LABEL_CURRENT)_on.etc.nc"))
-amoc_off_360 = mean_amoc_strength(joinpath(AMOC_DIR, "plasimelancholia_$(CO2_LABEL_CURRENT)_of.etc.nc"))
+amoc_on_285  = mean_amoc_strength("plasimelancholia_$(CO2_LABEL_PREINDUSTRIAL)_on.etc.nc")
+amoc_off_285 = mean_amoc_strength("plasimelancholia_$(CO2_LABEL_PREINDUSTRIAL)_of.etc.nc")
+amoc_on_360  = mean_amoc_strength("plasimelancholia_$(CO2_LABEL_CURRENT)_on.etc.nc")
+amoc_off_360 = mean_amoc_strength("plasimelancholia_$(CO2_LABEL_CURRENT)_of.etc.nc")
 
 ellipse_long_axis_1sigma(C::Matrix) = 2000 * sqrt(maximum(eigvals(Symmetric(C[1:2, 1:2]))))
 
@@ -767,7 +550,7 @@ metrics_df = DataFrame(
     mean_amoc_strength_Sv = [amoc_on_285, amoc_off_285, amoc_on_360, amoc_off_360],
 )
 
-csv_path = datadir("plasim", "resilience_metrics$(OUT_SUFFIX).csv")
+csv_path = datadir("results", "resilience_metrics.csv")
 CSV.write(csv_path, metrics_df)
 @info "Metrics CSV saved to: $csv_path"
 
@@ -841,15 +624,13 @@ Legend(fig4[2, 2],
     "CO₂ level",
 )
 
-fig4_path = plotsdir("plasim_local_variability$(OUT_SUFFIX).png")
+fig4_path = plotsdir("plasim_local_variability.png")
 wsave(fig4_path, fig4)
 @info "Figure 4 saved to: $fig4_path"
 
 # Display figures if running interactively
 display(fig1)
-N_DIMS >= 3 && display(fig1b)
 display(fig1c)
-N_DIMS >= 3 && display(fig1d)
 display(fig2)
 display(fig3)
 display(fig4)

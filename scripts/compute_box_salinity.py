@@ -6,18 +6,14 @@ Reads the zonally-averaged salinity fields ``s(time, depth, lat)`` produced by
 Börner et al. (files ``plasimedge_<co2>_edgetrack_itx<NNN>_<branch>.s_zonav.nc``
 in the ``285ppm`` / ``360ppm`` source folders) and reduces each field to box-mean
 salinity time series using the box geometry re-created for the PlaSim grid in
-``../plotting_perturbations.py`` (CLIMBER-X boxes, no tapering).  Two depth
-configurations are written side by side:
+``../plotting_perturbations.py`` (CLIMBER-X boxes, no tapering).  Only the
+paper-facing deep boxes are written:
 
-    shallow                              deep
-    salt_na     35N-80N , 0-100 m        salt_na_deep     35N-80N , 0-1000 m
-    salt_trop   35S-35N , 0-100 m        salt_trop_deep   35S-35N , 0-500 m
-    salt_south  90S-35S , 0-100 m        salt_south_deep  90S-35S , 0-100 m
+    salt_na     North Atlantic, 35N-80N , 0-1000 m
+    salt_trop   Tropical Atlantic, 35S-35N , 0-500 m
 
-(top 100 m = top 2 levels; 500 m is the cell edge below the 450 m layer = top 8
-levels; 1000 m selects the top 13 levels with bottom cell edge 1025 m; the
-Southern box is all-NaN at any depth, so salt_south_deep duplicates salt_south.)
-All six series are written into the same output files.
+500 m is the cell edge below the 450 m layer (top 8 levels). 1000 m selects
+the top 13 levels with bottom cell edge 1025 m.
 
 Because the input field is already zonally averaged, the CLIMBER-X Atlantic-basin
 restriction (NA/Trop) reduces to a plain latitude band; each box mean is a
@@ -27,7 +23,7 @@ volume-weighted average over its (lat × depth) cells, weighting by
 For every trajectory index that exists in both the ``lower`` and ``upper``
 branch folders, the two branches are combined into a single output file with a
 ``track`` dimension (``['upper', 'lower']`` — upper → AMOC-on, lower → AMOC-off),
-matching the format of ``data/plasim/plasimelancholia_*_edgetrack_*.etc.nc`` so
+matching the format expected by ``src/plasim_utils.jl`` so
 the existing analysis pipeline (``src/plasim_utils.jl``) can read them directly.
 
 The three converged-state equilibrium files per CO2 level
@@ -37,15 +33,15 @@ first reduced to the Atlantic zonal mean using Börner's ``PlaRegion`` mask
 (``Atlantic3D``, southern border -34° — the same Atlantic definition behind the
 edge-track s_zonav files), i.e. ``s.where(Atlantic3D()).mean(dim='lon')``, and
 then the identical box averaging is applied.  Each is written as a single
-``(time,)`` file matching ``data/plasim/plasimelancholia_<co2>_<state>.etc.nc``.
+``(time,)`` file matching the analysis loader's expected naming convention.
 
-Output: ``data/plasim_boxsalt/plasimelancholia_<co2>_edgetrack_<tag><NNN>.etc.nc``
+Output: ``data/custom_readouts/plasimelancholia_<co2>_edgetrack_<tag><NNN>.etc.nc``
 (``tag`` = ``itx`` for 285 ppm, ``iter`` for 360 ppm, contiguously indexed) and
 ``.../plasimelancholia_<co2>_<state>.etc.nc`` for the equilibria.
 
-To run the existing Julia analysis on these files, point ``DATA_DIR`` at
-``data/plasim_boxsalt`` and set ``VARIABLE_NAMES = ["salt_na", "salt_trop",
-"salt_south"]`` in ``scripts/plasim_edge_analysis.jl``.
+To run the existing Julia analysis on these files, use the default
+``VARIABLE_NAMES = ["salt_na", "salt_trop"]`` in
+``scripts/plasim_edge_analysis.jl``.
 
 Usage:
     python scripts/compute_box_salinity.py [--src SRC_ROOT] [--co2 285ppm 360ppm]
@@ -67,33 +63,20 @@ import xarray as xr
 # ---------------------------------------------------------------------------
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_SRC_ROOT = Path("/Volumes/KINGSTON/BoernerEtAl")
-OUT_ROOT = SCRIPT_DIR.parent / "data" / "plasim_boxsalt"
+OUT_ROOT = SCRIPT_DIR.parent / "data" / "custom_readouts"
 
-# Box depths.  SHALLOW_DEPTH is the closest PlaSim cell face to the CLIMBER-X
-# 105 m box (top 2 layers, 0-100 m).  The "deep" configuration copies the boxes
-# but takes the North Atlantic down to ~1000 m and the Tropical box down to the
-# 500 m cell edge (the bottom face of the 450 m layer = top 8 layers).  The
-# Southern box is unchanged (it has no Atlantic data at any depth, so it is
-# all-NaN regardless of the depth limit).
-SHALLOW_DEPTH   = 100.0     # top 2 layers (25 m, 75 m)
+# Box depths. The North Atlantic box reaches ~1000 m; the Tropical box reaches
+# the 500 m cell edge (the bottom face of the 450 m layer = top 8 layers).
 TROP_DEEP_DEPTH = 500.0     # top 8 layers (25..450 m); 500 m is an exact cell edge
 NA_DEEP_DEPTH   = 1000.0    # top 13 layers (25..950 m); bottom cell edge 1025 m (~1000 m)
 # depth_max = None  ->  full water column
 
 # Box latitude bands (cell-centre test, identical to plotting_perturbations.py).
 BOXES = {
-    "salt_na":         dict(lat_min=35.0,  lat_max=80.0,  depth_max=SHALLOW_DEPTH,
-                            long_name="North Atlantic box mean salinity (35-80N, 0-100 m)"),
-    "salt_trop":       dict(lat_min=-35.0, lat_max=35.0,  depth_max=SHALLOW_DEPTH,
-                            long_name="Tropical box mean salinity (35S-35N, 0-100 m)"),
-    "salt_south":      dict(lat_min=-90.0, lat_max=-35.0, depth_max=SHALLOW_DEPTH,
-                            long_name="Southern box mean salinity (90S-35S, 0-100 m)"),
-    "salt_na_deep":    dict(lat_min=35.0,  lat_max=80.0,  depth_max=NA_DEEP_DEPTH,
-                            long_name="North Atlantic deep box mean salinity (35-80N, 0-1000 m)"),
-    "salt_trop_deep":  dict(lat_min=-35.0, lat_max=35.0,  depth_max=TROP_DEEP_DEPTH,
-                            long_name="Tropical deep box mean salinity (35S-35N, 0-500 m)"),
-    "salt_south_deep": dict(lat_min=-90.0, lat_max=-35.0, depth_max=SHALLOW_DEPTH,
-                            long_name="Southern deep box mean salinity (90S-35S, 0-100 m)"),
+    "salt_na":   dict(lat_min=35.0,  lat_max=80.0, depth_max=NA_DEEP_DEPTH,
+                      long_name="North Atlantic box mean salinity (35-80N, 0-1000 m)"),
+    "salt_trop": dict(lat_min=-35.0, lat_max=35.0, depth_max=TROP_DEEP_DEPTH,
+                      long_name="Tropical box mean salinity (35S-35N, 0-500 m)"),
 }
 
 
@@ -104,7 +87,7 @@ def _depth_attr(box: dict):
 # Track order (matches the example .etc.nc files).
 TRACKS = ["upper", "lower"]          # upper -> AMOC-on, lower -> AMOC-off
 
-# Filename tag per CO2 level (matches the existing data/plasim naming).
+# Filename tag per CO2 level (matches the existing analysis naming).
 CO2_TAG = {"285ppm": "itx", "360ppm": "iter"}
 
 # Equilibrium (converged-state) files live directly in the CO2 folders as full

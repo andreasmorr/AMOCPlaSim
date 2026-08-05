@@ -3,7 +3,7 @@
 
 Export PlaSim edge-track data to CSV files for Python plotting.
 
-Outputs (all in data/plasim/paper/):
+Outputs (all in data/results/paper):
     trajectories_{co2_label}.csv   — traj_id, time, x1, x2, amoc_strength, label
     equilibria_{co2_label}.csv     — state, time, x1, x2, amoc_strength
     ellipses_{co2_label}.csv       — state, x, y
@@ -18,7 +18,6 @@ using DrWatson
 
 include(srcdir("plasim_utils.jl"))
 
-using NCDatasets
 using DataFrames
 using Statistics
 using LinearAlgebra
@@ -28,46 +27,19 @@ using CSV
 # Configuration (mirrors plasim_edge_analysis.jl exactly)
 # ─────────────────────────────────────────────────────────────────────────────
 
-# ── Dataset selection (must match plasim_edge_analysis.jl) ────────────────────
-#   :eof          — EOF-reduced coordinates (redu1/2/3) in data/plasim → paper/
-#   :boxsalt      — box-mean salinities (salt_na, salt_trop, 0-100 m) → paper_boxsalt/
-#   :boxsalt_deep — deep box salinities (salt_na_deep full column,
-#                   salt_trop_deep 0-500 m) → paper_boxsalt_deep/
-const MODE = :boxsalt_deep
-
-const DATASET_CONFIGS = Dict(
-    :eof => (
-        data_dir     = datadir("plasim"),
-        variables    = ["redu1", "redu2", "redu3"],
-        on_is_low    = true,
-        paper_subdir = "paper",
-    ),
-    :boxsalt => (
-        data_dir     = datadir("plasim_boxsalt"),
-        variables    = ["salt_na", "salt_trop"],
-        on_is_low    = false,
-        paper_subdir = "paper_boxsalt",
-    ),
-    :boxsalt_deep => (   # deep-box configuration: NA full column, Tropical 0-500 m
-        data_dir     = datadir("plasim_boxsalt"),
-        variables    = ["salt_na_deep", "salt_trop_deep"],
-        on_is_low    = false,
-        paper_subdir = "paper_boxsalt_deep",
-    ),
-)
-const CFG = DATASET_CONFIGS[MODE]
-
-const DATA_DIR                = CFG.data_dir
-const PAPER_DIR               = datadir("plasim", CFG.paper_subdir)
-const ON_IS_LOW               = CFG.on_is_low
-# AMOC strength is read from the EOF dataset directory (the box-salinity files
-# carry no `amoc_strength`); filenames match across both datasets.
-const AMOC_DIR                = DATASET_CONFIGS[:eof].data_dir
+const DATA_DIR                = datadir("custom_readouts")
+const PAPER_DIR               = datadir("results", "paper")
+const ON_IS_LOW               = false
+# AMOC strength is read from the compact sidecar produced by
+# scripts/extract_amoc_strength.jl. The sidecar variables are keyed by the
+# original source filenames, so the box-salinity pipeline no longer needs to
+# open the legacy reduced-coordinate NetCDF files.
+const AMOC_STRENGTH_FILE      = datadir("custom_readouts", "amoc_strength_timeseries.nc")
 const CO2_LABEL_CURRENT       = "360ppm"
 const CO2_LABEL_PREINDUSTRIAL = "285ppm"
 const N_FILES_360             = 38
 const N_FILES_285             = 37
-const VARIABLE_NAMES          = CFG.variables
+const VARIABLE_NAMES          = ["salt_na", "salt_trop"]
 const N_DIMS                  = length(VARIABLE_NAMES)
 const EPSILON_ON              = 0.1
 const EPSILON_OFF             = 0.2
@@ -87,37 +59,11 @@ file_pattern_285(i) = "plasimelancholia_$(CO2_LABEL_PREINDUSTRIAL)_edgetrack_itx
 
 # Single-track overload for equilibrium files (amoc_strength is 1-D there).
 function try_load_amoc_strength(filepath::String)
-    try
-        NCDataset(filepath, "r") do ds
-            haskey(ds, "amoc_strength") || return nothing
-            return Float64.(coalesce.(ds["amoc_strength"][:], NaN))
-        end
-    catch
-        return nothing
-    end
+    load_amoc_strength_series(AMOC_STRENGTH_FILE, filepath)
 end
 
 function try_load_amoc_strength(filepath::String, track_id::Int)
-    try
-        NCDataset(filepath, "r") do ds
-            haskey(ds, "amoc_strength") || return nothing
-            # Julia's NCDatasets reverses NetCDF dimension order.
-            # The file stores amoc_strength as (track=2, time=N); Julia reads
-            # it as (N, 2) = (time, track).  Use [:, :] to get the true 2-D
-            # matrix and then slice out the requested track column.
-            raw = ds["amoc_strength"][:, :]  # (n_time, n_track) in Julia
-            n_time, n_track = size(raw)
-            if n_track < n_time
-                # (time, track) layout — standard after dimension reversal
-                return Float64.(coalesce.(raw[:, track_id], NaN))
-            else
-                # (track, time) layout — Julia read it without reversal
-                return Float64.(coalesce.(raw[track_id, :], NaN))
-            end
-        end
-    catch
-        return nothing
-    end
+    load_amoc_strength_series(AMOC_STRENGTH_FILE, filepath; track_id = track_id)
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -154,7 +100,7 @@ function export_trajectories(
         # Load the AMOC time series for this specific track from its NetCDF file.
         file_id  = sub[1, :file_id]
         track_id = sub[1, :track_id]
-        fname    = joinpath(AMOC_DIR, file_pattern(file_id))
+        fname    = file_pattern(file_id)
         amoc_raw = try_load_amoc_strength(fname, track_id)  # 1-D Vector or nothing
 
         for t in 1:nrow(sub)
@@ -189,11 +135,11 @@ function export_equilibria(
 )
     # Try loading AMOC strength from the equilibrium NetCDF files
     amoc_on_arr  = try_load_amoc_strength(
-        joinpath(AMOC_DIR, "plasimelancholia_$(co2_label)_on.etc.nc"))
+        "plasimelancholia_$(co2_label)_on.etc.nc")
     amoc_off_arr = try_load_amoc_strength(
-        joinpath(AMOC_DIR, "plasimelancholia_$(co2_label)_of.etc.nc"))
+        "plasimelancholia_$(co2_label)_of.etc.nc")
     amoc_ed_arr  = try_load_amoc_strength(
-        joinpath(AMOC_DIR, "plasimelancholia_$(co2_label)_ed.etc.nc"))
+        "plasimelancholia_$(co2_label)_ed.etc.nc")
 
     rows = DataFrame(
         state         = String[],
