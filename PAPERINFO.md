@@ -232,6 +232,27 @@ The current row counts, including headers, are:
 | `ellipses` | 364 | 364 |
 | `state_means` | 4 | 4 |
 
+## Paper Figure
+
+`scripts/plotting_paper.py` produces `plots/plasim_paper.png`, a four-panel
+figure with two CO2 columns: 285 ppm (pre-industrial, left) and 360 ppm
+(current CO2, right).
+
+- Top row (a, b): AMOC strength in Sv along the edge-track trajectories,
+  coloured by their final classification (AMOC-on blue, AMOC-off orange-red),
+  plus dashed horizontal reference lines at the settled on- and off-state
+  equilibrium AMOC strengths.
+- Bottom row (c, d): the same trajectories in the custom deep-box salinity
+  plane, with North Atlantic salinity (0-1000 m) on the x-axis and Tropical
+  salinity (0-500 m) on the y-axis. Dashed Gaussian covariance ellipses mark
+  the on-state (blue), off-state (orange-red), and edge-state (near-black)
+  equilibrium clouds; the ellipse sigma multiple is set by the export.
+
+The figure data comes from the `trajectories`, `equilibria`, `ellipses`, and
+`state_means` CSV bundle in `data/results/paper/`. Unlike the other models,
+PlaSim-LSG trajectories are edge tracks rather than grid-sampled initial
+conditions, so no basin-fill grid is drawn.
+
 ## Paper Wording Notes
 
 Use "custom deep-box salinity readouts" or "deep-box salinity coordinates" for
