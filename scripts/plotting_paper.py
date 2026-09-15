@@ -155,7 +155,7 @@ def main() -> None:
                 ref = float(sub.iloc[-min(100, len(sub)):].mean())
                 ax_top.axhline(ref, color=color, lw=LW_EQUIL, ls=LS_EQUIL, alpha=ALPHA_EQUIL)
 
-        ax_top.set_title(title, fontsize=9)
+        ax_top.set_title(title, fontsize=8)
         if col == 0:
             ax_top.set_ylabel("AMOC strength (Sv)")
         else:
@@ -204,7 +204,7 @@ def main() -> None:
         ax.set_xlim(x_lo, x_hi)
 
     out_path = PLOTS_DIR / "plasim_paper.png"
-    fig.savefig(out_path, dpi=200, bbox_inches="tight")
+    fig.savefig(out_path, dpi=300, bbox_inches="tight")
     print(f"Figure saved: {out_path}")
     plt.close(fig)
 
