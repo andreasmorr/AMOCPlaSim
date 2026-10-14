@@ -46,7 +46,7 @@ amoc_strength_key(source_filepath::AbstractString) =
     load_amoc_strength_series(amoc_file, source_filepath; track_id=nothing)
 
 Load AMOC strength from the standalone sidecar NetCDF file created by
-`scripts/extract_amoc_strength.jl`.
+`scripts/extract_amoc_strength.py`.
 
 Equilibrium source files return a one-dimensional vector. Edge-track source
 files return either the full `(time, track)` matrix when `track_id === nothing`

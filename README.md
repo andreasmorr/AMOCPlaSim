@@ -18,7 +18,7 @@ variability, and the PlaSim rows of the synthesis figure.
 AMOCPlaSim/
 ├── scripts/
 │   ├── compute_box_salinity.py        # Build box-mean salinity NetCDFs
-│   ├── extract_amoc_strength.jl       # Build compact AMOC-strength sidecar
+│   ├── extract_amoc_strength.py       # Build AMOC-strength sidecar from Zenodo data
 │   ├── plasim_edge_analysis.jl        # Compute resilience metrics and diagnostics
 │   ├── plasim_export_paper_data.jl    # Export CSVs for paper plotting
 │   ├── plotting_paper.py              # Paper figure from exported CSVs
@@ -78,14 +78,23 @@ they are in `BoernerEtAl/part1/grid`, but `GRID_DIR` currently points to
 `/Volumes/KINGSTON/part1/grid`, so adjust it before running the equilibrium
 step.
 
-### `extract_amoc_strength.jl`
+### `extract_amoc_strength.py`
 
-Builds `data/custom_readouts/amoc_strength_timeseries.nc`, a compact sidecar containing
-only the AMOC-strength time series needed for the top row of the paper figure
-and for the mean-AMOC-strength column of the metrics CSV. Variables in the
-sidecar are keyed by the original source filename without `.etc.nc`. This script
-is only needed when regenerating the sidecar from external legacy
-reduced-coordinate NetCDF files.
+Builds `data/custom_readouts/amoc_strength_timeseries.nc`, a compact sidecar
+with the AMOC-strength time series (streamfunction maximum, 46-66N, Sv) used
+for the top row of the paper figure and the mean-AMOC-strength column of the
+metrics CSV. It reads the public Zenodo Part I data (default root
+`/Volumes/KINGSTON/BoernerEtAl/part1`, override with `--src`):
+
+- equilibrium runs from `<co2>/plasimedge_<co2>_{on,of,ed}.lsg.nc`,
+- edge tracks from the `.etc.nc` members of
+  `<co2>/plasimedge_<co2>_ed-iterations.zip` (read directly from the archive).
+
+Variables are keyed like the matching salinity readout without `.etc.nc`
+(e.g. `plasimelancholia_285ppm_edgetrack_itx000`). The archive members use the
+same contiguous numbering as the salinity readouts. When the readouts exist,
+the script checks that every AMOC series has the same number of valid years as
+the matching salinity track and stops otherwise.
 
 ### `plasim_edge_analysis.jl`
 
@@ -128,17 +137,10 @@ Run from the AMOCPlaSim directory:
 
 ```bash
 python scripts/compute_box_salinity.py
+python scripts/extract_amoc_strength.py
 julia --project scripts/plasim_edge_analysis.jl
 julia --project scripts/plasim_export_paper_data.jl
 python scripts/plotting_paper.py
-```
-
-If `data/custom_readouts/amoc_strength_timeseries.nc` needs to be regenerated,
-place the legacy reduced-coordinate `.etc.nc` source files in `data/results/`
-and run:
-
-```bash
-julia --project scripts/extract_amoc_strength.jl
 ```
 
 All analysis and plotting scripts use the two deep-box variables directly; no

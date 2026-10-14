@@ -35,7 +35,7 @@ series and EOF-analysis outputs have been removed.
 The implemented analysis is defined by:
 
 - `scripts/compute_box_salinity.py`
-- `scripts/extract_amoc_strength.jl`
+- `scripts/extract_amoc_strength.py`
 - `scripts/plasim_edge_analysis.jl`
 - `scripts/plasim_export_paper_data.jl`
 - `scripts/plotting_paper.py`
@@ -151,9 +151,13 @@ stored separately in:
 data/custom_readouts/amoc_strength_timeseries.nc
 ```
 
-This sidecar was cut from the legacy reduced-coordinate PlaSim NetCDF files.
-Each variable is keyed by the original source filename without the `.etc.nc`
-suffix, for example:
+This sidecar is built by `scripts/extract_amoc_strength.py` from the public
+Zenodo Part I data (doi:10.5281/zenodo.17053348): the equilibrium runs from
+`plasimedge_<co2>_{on,of,ed}.lsg.nc` and the edge tracks from the `.etc.nc`
+members of `plasimedge_<co2>_ed-iterations.zip`. AMOC strength is the maximum
+of the Atlantic overturning streamfunction between 46N and 66N. Each variable
+is keyed like the matching salinity readout without the `.etc.nc` suffix, for
+example:
 
 ```text
 plasimelancholia_285ppm_on
@@ -165,10 +169,16 @@ AMOC-strength variables are two-dimensional over time and track. The sidecar is
 used for the top row of `plots/plasim_paper.png` and for the
 `mean_amoc_strength_Sv` column in `data/results/resilience_metrics.csv`.
 
-At 360 ppm the AMOC-on and AMOC-off sidecar series are 1800 years long, while
-the matching salinity runs are 2000 years; every other sidecar series has the
-same length as its salinity series. `mean_amoc_strength_Sv` is the mean of the
-full sidecar series.
+Every AMOC series has the same length as its salinity series (the script
+checks this). `mean_amoc_strength_Sv` is the mean over the full equilibrium
+run. An earlier version of the sidecar was cut from an intermediate processed
+copy in which the 360 ppm AMOC-on and AMOC-off runs held only the first 1800 of
+the 2000 years; all other series were identical to the Zenodo data.
+
+The 360 ppm AMOC-off state has multi-centennial AMOC variability (200-year
+means between 1.4 and 2.2 Sv; the last 100 years average 2.60 Sv). The figure's
+reference lines therefore use the full-run mean rather than an end-of-run
+window.
 
 ## Resilience Analysis
 
@@ -269,8 +279,8 @@ Current `data/results/resilience_metrics.csv` values:
 |---------|-------|--------------------------|--------------------|------------------|-----------------------|
 | 285 | AMOC-on | 105.25 | 0.0498135 | 0.0356814 | 14.7227 |
 | 285 | AMOC-off | 116.00 | 0.2040272 | 0.0115056 | 1.1161 |
-| 360 | AMOC-on | 150.6316 | 0.1101618 | 0.0368075 | 15.0263 |
-| 360 | AMOC-off | 74.8182 | 0.0932569 | 0.0086736 | 1.6823 |
+| 360 | AMOC-on | 150.6316 | 0.1101618 | 0.0368075 | 15.0097 |
+| 360 | AMOC-off | 74.8182 | 0.0932569 | 0.0086736 | 1.7318 |
 
 The paper CSV bundle in `data/results/paper/` contains:
 
@@ -298,8 +308,8 @@ figure with two CO2 columns: 285 ppm (pre-industrial, left) and 360 ppm
   trajectories only (285 ppm: 4 AMOC-on and 4 AMOC-off of 74; 360 ppm: 19 and
   33 of 76), coloured by their classification (AMOC-on blue, AMOC-off
   orange-red), plus dashed horizontal reference lines at the on- and off-state
-  equilibrium AMOC strengths (mean of the last 100 valid years of each
-  equilibrium run).
+  equilibrium AMOC strengths (mean over the full equilibrium run, the same
+  values as `mean_amoc_strength_Sv`).
 - Bottom row (c, d): the same trajectories in the custom deep-box salinity
   plane, with North Atlantic salinity (0-1000 m) on the x-axis and Tropical
   salinity (0-500 m) on the y-axis. Dashed Gaussian covariance ellipses mark
@@ -321,6 +331,9 @@ Checked on 2026-10-14:
   All 81 regenerated readouts match the committed files to better than 1e-10
   (`salt_trop` is bit-identical). The depth levels confirm the box definitions
   above.
+- `scripts/extract_amoc_strength.py` rebuilt the AMOC-strength sidecar from
+  the Zenodo Part I files. The edge-track series are identical to the previous
+  sidecar; the 360 ppm AMOC-on and AMOC-off series now cover all 2000 years.
 - An independent Python re-implementation of the analysis reproduces every
   value in `data/results/resilience_metrics.csv` and all eight CSVs in
   `data/results/paper/` to machine precision, and `scripts/plotting_paper.py`

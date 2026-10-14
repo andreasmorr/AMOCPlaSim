@@ -31,9 +31,8 @@ const DATA_DIR                = datadir("custom_readouts")
 const PAPER_DIR               = datadir("results", "paper")
 const ON_IS_LOW               = false
 # AMOC strength is read from the compact sidecar produced by
-# scripts/extract_amoc_strength.jl. The sidecar variables are keyed by the
-# original source filenames, so the box-salinity pipeline no longer needs to
-# open the legacy reduced-coordinate NetCDF files.
+# scripts/extract_amoc_strength.py from the Zenodo Part I data. The sidecar
+# variables are keyed like the salinity readouts (filename without .etc.nc).
 const AMOC_STRENGTH_FILE      = datadir("custom_readouts", "amoc_strength_timeseries.nc")
 const CO2_LABEL_CURRENT       = "360ppm"
 const CO2_LABEL_PREINDUSTRIAL = "285ppm"

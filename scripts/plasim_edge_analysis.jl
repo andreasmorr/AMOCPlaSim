@@ -49,7 +49,7 @@ const AXIS_LABELS = ["North Atlantic salinity (psu, 0-1000 m)",
 const ON_IS_LOW = false   # AMOC-on has the higher North Atlantic box salinity
 
 # AMOC strength (a physical, reduction-independent diagnostic) is stored in the
-# compact sidecar produced by scripts/extract_amoc_strength.jl.
+# compact sidecar produced by scripts/extract_amoc_strength.py.
 const AMOC_STRENGTH_FILE = datadir("custom_readouts", "amoc_strength_timeseries.nc")
 
 # CO2 level labels (used in filenames)

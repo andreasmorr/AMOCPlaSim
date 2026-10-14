@@ -146,13 +146,14 @@ def main() -> None:
                         ha="center", va="center", transform=ax_top.transAxes,
                         fontsize=8, color="gray")
 
-        # Reference lines from equilibrium data: the settled equilibrium AMOC
-        # strength (mean of the last valid steps). Drop NaNs first because the
-        # salinity and AMOC sidecar time series can have different lengths.
+        # Reference lines from equilibrium data: the mean AMOC strength over
+        # the full equilibrium run (same as mean_amoc_strength_Sv in
+        # resilience_metrics.csv). The 360 ppm off state has multi-centennial
+        # variability, so a short end-of-run window is not representative.
         for state, color in [("on", COL_ON), ("off", COL_OFF)]:
             sub = df_equil[df_equil["state"] == state]["amoc_strength"].dropna()
             if not sub.empty:
-                ref = float(sub.iloc[-min(100, len(sub)):].mean())
+                ref = float(sub.mean())
                 ax_top.axhline(ref, color=color, lw=LW_EQUIL, ls=LS_EQUIL, alpha=ALPHA_EQUIL)
 
         ax_top.set_title(title, fontsize=8)
