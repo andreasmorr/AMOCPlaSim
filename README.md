@@ -47,9 +47,10 @@ The paper-facing reduction uses two deep-box salinity coordinates:
 | `salt_na` | North Atlantic, 35N-80N | 0-1000 m |
 | `salt_trop` | Tropical Atlantic, 35S-35N | 0-500 m |
 
-The source salinity fields are Atlantic zonal means, so the Southern Ocean box
-has no data coverage in this reduction. The effective state space used by the
-analysis is therefore two-dimensional.
+The edge-track source salinity fields are Atlantic zonal means, so both boxes
+are latitude-depth boxes (latitude centres 36.25-78.75N and 33.75S-33.75N on
+the 2.5-degree grid). The analysis works in the two-dimensional plane
+`(salt_na, salt_trop)`.
 
 ## Scripts
 
@@ -60,11 +61,22 @@ Edge tracks are read from zonally averaged files
 `<co2>/{lower,upper}/plasimedge_<co2>_edgetrack_itxNNN_<branch>.s_zonav.nc`.
 For each shared index, the `upper` branch (AMOC-on) and `lower` branch
 (AMOC-off) are combined into one output file with a `track` dimension.
+Output files are numbered contiguously from 000. At 285 ppm the source indices
+itx014 and itx025 do not exist in either branch, so output `itx014` is source
+`itx015`, and so on; each file stores its source index in the
+`source_itx_index` attribute.
 
 Equilibrium files are read from `<co2>/plasimedge_<co2>_{on,of,ed}.tsv.nc`.
 They contain full salinity fields and are first reduced to the Atlantic zonal
 mean with the vendored `PlaRegion` mask before the same box averages are
 computed.
+
+The source root defaults to `/Volumes/KINGSTON/BoernerEtAl` (override with
+`--src`). The grid files for the mask (`wet.nc`, `basins_scalar.nc`,
+`basins_vector.nc`) are read from the hard-coded `GRID_DIR`. On the data drive
+they are in `BoernerEtAl/part1/grid`, but `GRID_DIR` currently points to
+`/Volumes/KINGSTON/part1/grid`, so adjust it before running the equilibrium
+step.
 
 ### `extract_amoc_strength.jl`
 
@@ -79,15 +91,17 @@ reduced-coordinate NetCDF files.
 
 Computes the PlaSim resilience diagnostics for 285 ppm and 360 ppm:
 
-- trajectory labels: AMOC-on versus AMOC-off, classified by final North
-  Atlantic salinity,
-- convergence time: from the last visit inside the edge ellipse to first entry
-  into the target attractor ellipse,
-- edge-to-attractor distance: distance between the edge and attractor Gaussian
-  ellipses,
-- local variability and local resilience from the AMOC-on equilibrium
-  covariance ellipse,
-- metrics CSV and diagnostic plots.
+- trajectory labels: AMOC-on versus AMOC-off, from the mean North Atlantic
+  salinity over the last 10% of each trajectory, split at the median over all
+  trajectories of that CO2 level (so exactly half are labelled AMOC-on),
+- convergence time: from the last visit inside the edge-state 4-sigma ellipse
+  to the first later entry into the target attractor's 4-sigma ellipse;
+  trajectories that never get there are excluded from the mean,
+- edge-to-attractor distance: gap between the edge and attractor 4-sigma
+  ellipses, measured along the line joining their centres,
+- local variability and local resilience from the AMOC-on and AMOC-off
+  equilibrium covariance matrices,
+- metrics CSV, `resilience_summaries.jld2`, and five diagnostic plots.
 
 The start of each edge-state equilibrium run is trimmed before computing the
 edge mean/covariance: 4 years at 285 ppm and 60 years at 360 ppm.
@@ -100,6 +114,9 @@ Exports the current paper data to `data/results/paper/`:
 - `equilibria_{285ppm,360ppm}.csv`
 - `ellipses_{285ppm,360ppm}.csv`
 - `state_means_{285ppm,360ppm}.csv`
+
+`trajectories_*.csv` contains only the trajectories that converged in the
+sense above.
 
 ### `plotting_paper.py`
 
@@ -135,6 +152,12 @@ Julia dependencies are listed in `Project.toml`; instantiate with:
 using Pkg; Pkg.instantiate()
 ```
 
+Both Julia analysis scripts also load `CSV`, which is not yet listed in
+`Project.toml`; add it with `Pkg.add("CSV")` unless it is in your default
+environment.
+
 Python requires `numpy`, `matplotlib`, `pandas`, `xarray`, and `netCDF4`.
+`plotting_paper.py` also imports `../amoc_plot_style.py` from the parent
+AMOCResilience repository.
 `compute_box_salinity.py` also needs the PlaSim grid files referenced by
 `GRID_DIR` for the vendored `scripts/regions.py` mask helper.

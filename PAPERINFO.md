@@ -118,15 +118,29 @@ The generated salinity readouts consist of:
 - Six equilibrium files:
   `plasimelancholia_{285ppm,360ppm}_{on,of,ed}.etc.nc`.
 
+Edge-track files are numbered contiguously. At 285 ppm the source data contain
+no edge track itx014 or itx025 (in either branch), so outputs `itx014` to
+`itx036` are source `itx015` to `itx038`. Each file stores its source index in
+the `source_itx_index` attribute. The AMOC-strength sidecar uses the same
+numbering (track lengths match file by file).
+
 Each edge-track file contains two tracks with coordinate labels `upper` and
 `lower`. The source convention is:
 
 - `upper`: branch converging to AMOC-on,
 - `lower`: branch converging to AMOC-off.
 
-The analysis still classifies trajectories from their final North Atlantic
-salinity rather than from the branch label. In the retained coordinates,
-AMOC-on has higher final `salt_na`, so `ON_IS_LOW = false`.
+The analysis classifies trajectories from their final North Atlantic salinity
+rather than from the branch label: the mean `salt_na` over the last
+`FINAL_FRACTION` (10%) of each trajectory is split at the median over all
+trajectories of that CO2 level, and the higher half is labelled AMOC-on
+(`ON_IS_LOW = false`). This forces an even on/off split. It disagrees with the
+branch label for two trajectories per CO2 level (285 ppm: itx000 upper and
+itx033 lower; 360 ppm: iter008 lower and iter032 upper). None of these four
+converge, so they enter no metric and are not in the paper figure. The 285 ppm
+edge state has a higher mean `salt_na` (35.492) than the AMOC-on state
+(35.473), so the rule "higher salinity means AMOC-on" only holds once a
+trajectory has left the saddle region.
 
 ## AMOC Strength
 
@@ -151,6 +165,11 @@ AMOC-strength variables are two-dimensional over time and track. The sidecar is
 used for the top row of `plots/plasim_paper.png` and for the
 `mean_amoc_strength_Sv` column in `data/results/resilience_metrics.csv`.
 
+At 360 ppm the AMOC-on and AMOC-off sidecar series are 1800 years long, while
+the matching salinity runs are 2000 years; every other sidecar series has the
+same length as its salinity series. `mean_amoc_strength_Sv` is the mean of the
+full sidecar series.
+
 ## Resilience Analysis
 
 The current analysis is two-dimensional in `(salt_na, salt_trop)`.
@@ -171,6 +190,12 @@ Constants in `scripts/plasim_edge_analysis.jl` and
 | 285 ppm edge trim | first 4 years removed |
 | 360 ppm edge trim | first 60 years removed |
 
+`ELLIPSE_SIGMA = 4` sets the ellipses used for the convergence-time and
+edge-distance metrics, not only the plotted ellipses. The CSV columns
+`ellipsoid_volume_1sigma` and `ellipse_long_axis_1sigma` are 1-sigma
+quantities. `EPSILON_ON` and `EPSILON_OFF` (0.1 and 0.2) are only used by the
+legacy epsilon-ball fallback and do not affect the results.
+
 Attractor positions are not estimated from the final states of the edge-track
 trajectories. They are time means of the dedicated equilibrium files:
 
@@ -183,14 +208,42 @@ equilibrium files. Edge covariance is computed from the trimmed edge
 equilibrium file.
 
 Convergence time is computed with the ellipse-based method in
-`src/plasim_utils.jl`: for each converged trajectory, it is the time from the
-last visit inside the edge-state ellipse to the first entry into the target
-attractor ellipse. The script supplies the covariance matrices, so the legacy
-epsilon-ball fallback is not the paper-facing method.
+`src/plasim_utils.jl`: for each trajectory, it is the time from the last visit
+inside the edge-state 4-sigma ellipse to the first later entry into the target
+attractor's 4-sigma ellipse (Mahalanobis distance at most 4). Trajectories that
+never enter the edge ellipse, or never reach the attractor ellipse afterwards,
+count as not converged and are excluded from the mean. The script supplies the
+covariance matrices, so the legacy epsilon-ball fallback is not the
+paper-facing method.
 
-Edge-to-attractor distance is the gap between the edge-state Gaussian ellipse
-and the target-attractor Gaussian ellipse in the retained two-dimensional
-salinity plane. The paper's PlaSim critical-shock proxy is the AMOC-on row of
+Converged trajectories per CO2 level and target state:
+
+| CO2 ppm | state | trajectories | converged |
+|---------|-------|--------------|-----------|
+| 285 | AMOC-on | 37 | 4 |
+| 285 | AMOC-off | 37 | 4 |
+| 360 | AMOC-on | 38 | 19 |
+| 360 | AMOC-off | 38 | 33 |
+
+The 285 ppm mean convergence times therefore rest on four trajectories each.
+Many 285 ppm edge tracks are short (26 of 37 files are at most 101 years
+long).
+
+Edge-to-attractor distance is the gap between the edge-state and
+target-attractor 4-sigma Gaussian ellipses in the retained two-dimensional
+salinity plane, measured along the line joining the two centres:
+`max(0, |mu_att - mu_edge| - r_edge - r_att)`, where each `r` is the 4-sigma
+radius of that ellipse in the centre-to-centre direction. This is not the
+minimum distance between the ellipses, which is smaller:
+
+| CO2 ppm | state | `mean_edge_dist` (along centres) | minimum gap |
+|---------|-------|----------------------------------|-------------|
+| 285 | AMOC-on | 0.0498 | 0.0481 |
+| 285 | AMOC-off | 0.2040 | 0.1582 |
+| 360 | AMOC-on | 0.1102 | 0.1088 |
+| 360 | AMOC-off | 0.0933 | 0.0643 |
+
+The paper's PlaSim critical-shock proxy is the AMOC-on row of
 `mean_edge_dist`.
 
 Local resilience is stored as:
@@ -201,7 +254,10 @@ local_resilience = 1 / (2000 * sqrt(lambda_max(C[1:2, 1:2])))
 
 where `C` is the local equilibrium covariance matrix in the retained salinity
 coordinates. This is a covariance-ellipse proxy, not a linear eigenvalue of the
-underlying PlaSim-LSG dynamics.
+underlying PlaSim-LSG dynamics. `2 * sqrt(lambda_max)` is the full long axis
+of the 1-sigma ellipse in psu; the extra factor 1000 expresses it in units of
+1e-3 psu (stored as `ellipse_long_axis_1sigma`). It is computed for both
+AMOC-on and AMOC-off from the untrimmed equilibrium runs.
 
 No basin volume is estimated for PlaSim in the current analysis.
 
@@ -238,20 +294,37 @@ The current row counts, including headers, are:
 figure with two CO2 columns: 285 ppm (pre-industrial, left) and 360 ppm
 (current CO2, right).
 
-- Top row (a, b): AMOC strength in Sv along the edge-track trajectories,
-  coloured by their final classification (AMOC-on blue, AMOC-off orange-red),
-  plus dashed horizontal reference lines at the settled on- and off-state
-  equilibrium AMOC strengths.
+- Top row (a, b): AMOC strength in Sv along the converged edge-track
+  trajectories only (285 ppm: 4 AMOC-on and 4 AMOC-off of 74; 360 ppm: 19 and
+  33 of 76), coloured by their classification (AMOC-on blue, AMOC-off
+  orange-red), plus dashed horizontal reference lines at the on- and off-state
+  equilibrium AMOC strengths (mean of the last 100 valid years of each
+  equilibrium run).
 - Bottom row (c, d): the same trajectories in the custom deep-box salinity
   plane, with North Atlantic salinity (0-1000 m) on the x-axis and Tropical
   salinity (0-500 m) on the y-axis. Dashed Gaussian covariance ellipses mark
   the on-state (blue), off-state (orange-red), and edge-state (near-black)
-  equilibrium clouds; the ellipse sigma multiple is set by the export.
+  equilibrium clouds, drawn at 4 sigma (`ELLIPSE_SIGMA`), the same ellipses
+  used for the metrics.
 
-The figure data comes from the `trajectories`, `equilibria`, `ellipses`, and
-`state_means` CSV bundle in `data/results/paper/`. Unlike the other models,
-PlaSim-LSG trajectories are edge tracks rather than grid-sampled initial
-conditions, so no basin-fill grid is drawn.
+The figure reads the `trajectories`, `equilibria` (AMOC reference lines
+only), and `ellipses` CSVs in `data/results/paper/`; `state_means` is loaded but
+not drawn. Unlike the other models, PlaSim-LSG trajectories are edge tracks
+rather than grid-sampled initial conditions, so no basin-fill grid is drawn.
+
+## Reproducibility Check
+
+Checked on 2026-10-14:
+
+- `scripts/compute_box_salinity.py` was rerun from the raw PlaSim-LSG data on
+  the KINGSTON drive (with `GRID_DIR` pointed at `BoernerEtAl/part1/grid`).
+  All 81 regenerated readouts match the committed files to better than 1e-10
+  (`salt_trop` is bit-identical). The depth levels confirm the box definitions
+  above.
+- An independent Python re-implementation of the analysis reproduces every
+  value in `data/results/resilience_metrics.csv` and all eight CSVs in
+  `data/results/paper/` to machine precision, and `scripts/plotting_paper.py`
+  regenerates `plots/plasim_paper.png` from them.
 
 ## Paper Wording Notes
 
